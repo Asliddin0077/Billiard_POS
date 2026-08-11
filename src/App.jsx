@@ -2,8 +2,9 @@ import React, { useState, useEffect } from "react";
 import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
-  Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus
+  Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound
 } from "lucide-react";
+import { supabase } from "./supabaseClient";
 
 const FELT = "#0b3d2e";
 const FELT_DARK = "#082b20";
@@ -12,11 +13,9 @@ const CREAM = "#f3ecdd";
 const GOLD = "#c9a227";
 const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
+const SESSION_KEY = "billiard-pos-session";
 
-const ADMIN_LOGIN = "Asliddin";
-const ADMIN_PASS = "Asliddin00";
-
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+// ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
 function fmtDuration(sec) {
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
@@ -63,295 +62,362 @@ function canAccess(owner) {
 function isBanned(u) {
   return u && u.banned && u.banUntil && u.banUntil > Date.now();
 }
+function unwrapRpc(data) { return Array.isArray(data) ? data[0] : data; }
 
-const emptyState = {
-  users: [], adminAccounts: [], promoCodes: [],
-  hallsByUser: {}, barByUser: {}, historyByUser: {}, chats: {},
-  session: { userId: null, isAdmin: false, staffName: null },
-};
+// ---------------- DB row -> JS object mapping ----------------
+function mapUser(row) {
+  if (!row) return null;
+  return {
+    id: row.id, name: row.name, phone: row.phone, login: row.login,
+    subscribed: row.subscribed, accountType: row.account_type,
+    banned: row.banned, banUntil: row.ban_until ? new Date(row.ban_until).getTime() : null,
+    banReason: row.ban_reason || "", createdAt: new Date(row.created_at).getTime(),
+  };
+}
+function mapTable(row) {
+  return {
+    id: row.id, name: row.name, rate: Number(row.rate), status: row.status,
+    startTime: row.start_time ? new Date(row.start_time).getTime() : null,
+    extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price) })),
+  };
+}
+function mapHall(row) { return { id: row.id, name: row.name, tables: (row.billiard_tables || []).map(mapTable) }; }
+function mapBarItem(row) { return { id: row.id, name: row.name, price: Number(row.price), emoji: row.emoji, color: row.color }; }
+function mapHistory(row) {
+  return {
+    id: row.id, hallName: row.hall_name, tableName: row.table_name,
+    startTime: new Date(row.start_time).getTime(), endTime: new Date(row.end_time).getTime(),
+    duration: Number(row.duration_seconds), tableCost: Number(row.table_cost),
+    extras: (row.extras || []).map((e) => ({ ...e, price: Number(e.price) })),
+    extrasCost: Number(row.extras_cost), total: Number(row.total),
+  };
+}
+function mapPromo(row) { return { code: row.code, expiry: row.expiry ? new Date(row.expiry).getTime() : null, used: row.used, usedBy: row.used_by }; }
+function mapChat(row) { return { id: row.id, ownerId: row.owner_id, from: row.from_role, text: row.message, broadcast: row.broadcast, readByAdmin: row.read_by_admin, readByUser: row.read_by_user, ts: new Date(row.created_at).getTime() }; }
+function mapAdmin(row) { return { login: row.login, name: row.name, createdAt: new Date(row.created_at).getTime() }; }
+
+// ---------------- data fetch helpers ----------------
+async function fetchOwnerData(ownerId) {
+  const [hallsRes, barRes, histRes, chatRes] = await Promise.all([
+    supabase.from("halls").select("*, billiard_tables(*, table_extras(*))").eq("owner_id", ownerId).order("created_at"),
+    supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
+    supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
+    supabase.from("chats").select("*").eq("owner_id", ownerId).order("created_at"),
+  ]);
+  return {
+    halls: (hallsRes.data || []).map(mapHall),
+    bar: (barRes.data || []).map(mapBarItem),
+    history: (histRes.data || []).map(mapHistory),
+    chats: (chatRes.data || []).map(mapChat),
+  };
+}
+async function fetchAdminData() {
+  const [usersRes, promoRes, adminsRes, chatsRes] = await Promise.all([
+    supabase.from("users").select("*").order("created_at", { ascending: false }),
+    supabase.from("promo_codes").select("*").order("created_at", { ascending: false }),
+    supabase.from("admin_accounts").select("*").order("created_at", { ascending: false }),
+    supabase.from("chats").select("*").order("created_at"),
+  ]);
+  const grouped = {};
+  (chatsRes.data || []).forEach((row) => { const m = mapChat(row); (grouped[row.owner_id] = grouped[row.owner_id] || []).push(m); });
+  return {
+    users: (usersRes.data || []).map(mapUser),
+    promoCodes: (promoRes.data || []).map(mapPromo),
+    adminAccounts: (adminsRes.data || []).map(mapAdmin),
+    chatsByUser: grouped,
+  };
+}
 
 export default function BilliardPOS() {
   const [loaded, setLoaded] = useState(false);
-  const [data, setData] = useState(emptyState);
   const [screen, setScreen] = useState("auth");
-  const [activeHallId, setActiveHallId] = useState(null);
-  const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
+  const [now, setNow] = useState(Date.now());
+  const [activeHallId, setActiveHallId] = useState(null);
 
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminLogin, setAdminLogin] = useState(null);
+
+  const [halls, setHalls] = useState([]);
+  const [bar, setBar] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [myChat, setMyChat] = useState([]);
+
+  const [users, setUsers] = useState([]);
+  const [promoCodes, setPromoCodes] = useState([]);
+  const [adminAccounts, setAdminAccounts] = useState([]);
+  const [chatsByUser, setChatsByUser] = useState({});
+
+  const [viewUserBasic, setViewUserBasic] = useState(null);
+  const [viewUserContent, setViewUserContent] = useState(null);
+  const [viewUserLoading, setViewUserLoading] = useState(false);
+
+  function showToast(msg) { setToast(msg); }
+  function persistSession(s) { try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (e) {} }
+
+  // ---- initial session restore ----
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("billiard-pos-v3");
-      if (raw) {
-        const d = JSON.parse(raw);
-        const merged = { ...emptyState, ...d };
-        setData(merged);
-        if (merged.session?.isAdmin) setScreen("admin");
-        else if (merged.session?.userId) {
-          const u = merged.users.find((x) => x.id === merged.session.userId);
-          if (!u) setScreen("auth");
-          else if (isBanned(u)) setScreen("banned");
-          else if (!canAccess(u)) setScreen("subscribe");
-          else setScreen("halls");
+    (async () => {
+      try {
+        const raw = localStorage.getItem(SESSION_KEY);
+        if (raw) {
+          const s = JSON.parse(raw);
+          if (s.isAdmin) {
+            setIsAdmin(true);
+            setAdminLogin(s.adminLogin || "Asliddin");
+            const d = await fetchAdminData();
+            setUsers(d.users); setPromoCodes(d.promoCodes); setAdminAccounts(d.adminAccounts); setChatsByUser(d.chatsByUser);
+            setScreen("admin");
+          } else if (s.userId) {
+            const { data } = await supabase.from("users").select("*").eq("id", s.userId).single();
+            if (data) {
+              const u = mapUser(data);
+              setCurrentUser(u);
+              if (isBanned(u)) { setScreen("banned"); }
+              else {
+                const od = await fetchOwnerData(u.id);
+                setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats);
+                setScreen(canAccess(u) ? "halls" : "subscribe");
+              }
+            }
+          }
         }
-      }
-    } catch (e) {}
-    setLoaded(true);
+      } catch (e) {}
+      setLoaded(true);
+    })();
   }, []);
 
-  useEffect(() => {
-    if (!loaded) return;
-    try { localStorage.setItem("billiard-pos-v3", JSON.stringify(data)); } catch (e) {}
-  }, [data, loaded]);
-
-  const currentUser = data.users.find((u) => u.id === data.session.userId) || null;
-  const halls = currentUser ? data.hallsByUser[currentUser.id] || [] : [];
-  const bar = currentUser ? data.barByUser[currentUser.id] || [] : [];
-  const history = currentUser ? data.historyByUser[currentUser.id] || [] : [];
-  const myChat = currentUser ? data.chats[currentUser.id] || [] : [];
   const anyPlaying = halls.some((h) => h.tables.some((t) => t.status === "playing"));
-  const userUnreadCount = myChat.filter((m) => m.from === "admin" && !m.readByUser).length;
-  const adminUnreadUserCount = data.users.filter((u) => (data.chats[u.id] || []).some((m) => m.from === "user" && !m.readByAdmin)).length;
-
   useEffect(() => {
     if (!anyPlaying) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [anyPlaying]);
-
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(null), 2400);
     return () => clearTimeout(id);
   }, [toast]);
 
-  function showToast(msg) { setToast(msg); }
-  function update(fn) { setData((prev) => fn(structuredClone(prev))); }
+  const userUnreadCount = myChat.filter((m) => m.from === "admin" && !m.readByUser).length;
+  const adminUnreadUserCount = users.filter((u) => (chatsByUser[u.id] || []).some((m) => m.from === "user" && !m.readByAdmin)).length;
+
+  async function refreshOwnerData(ownerId) {
+    const od = await fetchOwnerData(ownerId || currentUser.id);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats);
+  }
+  async function refreshMyChat() {
+    const { data } = await supabase.from("chats").select("*").eq("owner_id", currentUser.id).order("created_at");
+    setMyChat((data || []).map(mapChat));
+  }
+  async function loadAdmin() {
+    const d = await fetchAdminData();
+    setUsers(d.users); setPromoCodes(d.promoCodes); setAdminAccounts(d.adminAccounts); setChatsByUser(d.chatsByUser);
+  }
 
   // ---- auth ----
-  function handleRegister({ name, phone, login, password }) {
+  async function handleRegister({ name, phone, login, password }) {
     const normPhone = normalizePhone(phone);
     if (!normPhone) { showToast("Telefon raqam noto'g'ri. Masalan: +998991234567"); return; }
-    if (!name.trim() || !login.trim() || password.length < 4) { showToast("Barcha maydonlarni to'g'ri to'ldiring"); return; }
-    if (data.users.some((u) => u.login.toLowerCase() === login.trim().toLowerCase())) { showToast("Bu login band"); return; }
-    const id = uid();
-    update((d) => {
-      d.users.push({
-        id, name: name.trim(), phone: normPhone, login: login.trim(), password,
-        subscribed: false, accountType: "oddiy", banned: false, banUntil: null, banReason: "",
-        staff: [], createdAt: Date.now(),
-      });
-      d.hallsByUser[id] = []; d.barByUser[id] = []; d.historyByUser[id] = []; d.chats[id] = [];
-      d.session = { userId: id, isAdmin: false, staffName: null };
-      return d;
-    });
+    if (!name.trim() || !login.trim() || password.length < 8) { showToast("Barcha maydonlarni to'g'ri to'ldiring (parol kamida 8 belgi)"); return; }
+    const { data, error } = await supabase.rpc("register_user", { p_name: name.trim(), p_phone: normPhone, p_login: login.trim(), p_password: password });
+    if (error) { showToast(error.message.includes("LOGIN_TAKEN") ? "Bu login band" : "Xatolik yuz berdi"); return; }
+    const u = mapUser(unwrapRpc(data));
+    setCurrentUser(u); setHalls([]); setBar([]); setHistory([]); setMyChat([]);
+    persistSession({ userId: u.id, isAdmin: false });
     setScreen("subscribe");
   }
 
-  function handleLogin(login, password) {
-    if (login.trim() === ADMIN_LOGIN && password === ADMIN_PASS) {
-      update((d) => { d.session = { userId: null, isAdmin: true, staffName: null }; return d; });
-      setScreen("admin"); return;
-    }
-    const extraAdmin = data.adminAccounts.find((a) => a.login.toLowerCase() === login.trim().toLowerCase() && a.password === password);
-    if (extraAdmin) {
-      update((d) => { d.session = { userId: null, isAdmin: true, staffName: extraAdmin.name }; return d; });
-      setScreen("admin"); return;
-    }
-    const owner = data.users.find((x) => x.login.toLowerCase() === login.trim().toLowerCase() && x.password === password);
-    if (owner) {
-      if (isBanned(owner)) { setDataBannedCheck(owner); setScreen("banned"); return; }
-      autoClearBan(owner.id);
-      update((d) => { d.session = { userId: owner.id, isAdmin: false, staffName: null }; return d; });
-      setScreen(canAccess(owner) ? "halls" : "subscribe");
+  async function handleLogin(loginRaw, password) {
+    const login = (loginRaw || "").trim();
+    if (!password) { showToast("Parolni kiriting"); return; }
+    // Bo'sh login + parol -> faqat bosh admin (Asliddin) uchun tezkor kirish
+    if (!login && password) {
+      const quickAdmin = await supabase.rpc("verify_admin_login", { p_login: "Asliddin", p_password: password });
+      if (!quickAdmin.error && quickAdmin.data && quickAdmin.data.length > 0) {
+        setIsAdmin(true); setAdminLogin(quickAdmin.data[0].login);
+        persistSession({ userId: null, isAdmin: true, adminLogin: quickAdmin.data[0].login });
+        const d = await fetchAdminData();
+        setUsers(d.users); setPromoCodes(d.promoCodes); setAdminAccounts(d.adminAccounts); setChatsByUser(d.chatsByUser);
+        setScreen("admin");
+        return;
+      }
+      showToast("Login va parolni kiriting");
       return;
     }
-    // check staff logins across all owners
-    for (const u of data.users) {
-      const staff = (u.staff || []).find((s) => s.login.toLowerCase() === login.trim().toLowerCase() && s.password === password);
-      if (staff) {
-        if (isBanned(u)) { setScreen("banned"); return; }
-        update((d) => { d.session = { userId: u.id, isAdmin: false, staffName: staff.name }; return d; });
-        if (!canAccess(u) && staff.accountType !== "vip") { setScreen("blocked"); return; }
-        setScreen("halls"); return;
-      }
+    const adminRes = await supabase.rpc("verify_admin_login", { p_login: login, p_password: password });
+    if (!adminRes.error && adminRes.data && adminRes.data.length > 0) {
+      setIsAdmin(true); setAdminLogin(adminRes.data[0].login);
+      persistSession({ userId: null, isAdmin: true, adminLogin: adminRes.data[0].login });
+      const d = await fetchAdminData();
+      setUsers(d.users); setPromoCodes(d.promoCodes); setAdminAccounts(d.adminAccounts); setChatsByUser(d.chatsByUser);
+      setScreen("admin");
+      return;
     }
-    showToast("Login yoki parol noto'g'ri");
+    const userRes = await supabase.rpc("verify_user_login", { p_login: login, p_password: password });
+    if (userRes.error || !userRes.data || userRes.data.length === 0) { showToast("Login yoki parol noto'g'ri"); return; }
+    let u = mapUser(userRes.data[0]);
+    if (u.banned && u.banUntil && u.banUntil <= Date.now()) {
+      await supabase.from("users").update({ banned: false, ban_until: null, ban_reason: "" }).eq("id", u.id);
+      u = { ...u, banned: false, banUntil: null, banReason: "" };
+    }
+    setCurrentUser(u);
+    persistSession({ userId: u.id, isAdmin: false });
+    if (isBanned(u)) { setScreen("banned"); return; }
+    const od = await fetchOwnerData(u.id);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats);
+    setScreen(canAccess(u) ? "halls" : "subscribe");
   }
-
-  function autoClearBan(userId) {
-    update((d) => {
-      const u = d.users.find((x) => x.id === userId);
-      if (u && u.banned && u.banUntil && u.banUntil <= Date.now()) { u.banned = false; u.banUntil = null; u.banReason = ""; }
-      return d;
-    });
-  }
-  function setDataBannedCheck() {} // placeholder for symmetry
 
   function handleLogout() {
-    update((d) => { d.session = { userId: null, isAdmin: false, staffName: null }; return d; });
+    persistSession({ userId: null, isAdmin: false });
+    setCurrentUser(null); setIsAdmin(false); setAdminLogin(null);
+    setHalls([]); setBar([]); setHistory([]); setMyChat([]);
+    setUsers([]); setPromoCodes([]); setAdminAccounts([]); setChatsByUser({});
     setActiveHallId(null); setScreen("auth");
   }
 
-  function activatePromo(code) {
-    const found = data.promoCodes.find(
-      (p) => p.code.toLowerCase() === code.trim().toLowerCase() && !p.used && (p.expiry === null || p.expiry >= Date.now())
-    );
-    if (!found) { showToast("Promokod noto'g'ri, muddati o'tgan yoki ishlatilgan"); return; }
-    update((d) => {
-      d.promoCodes = d.promoCodes.map((p) => (p.code === found.code ? { ...p, used: true, usedBy: currentUser.id } : p));
-      d.users = d.users.map((u) => (u.id === currentUser.id ? { ...u, subscribed: true } : u));
-      return d;
-    });
+  async function activatePromo(code) {
+    const { data } = await supabase.from("promo_codes").select("*").ilike("code", code.trim()).maybeSingle();
+    if (!data || data.used || (data.expiry && new Date(data.expiry).getTime() < Date.now())) {
+      showToast("Promokod noto'g'ri, muddati o'tgan yoki ishlatilgan"); return;
+    }
+    await supabase.from("promo_codes").update({ used: true, used_by: currentUser.id }).eq("code", data.code);
+    await supabase.from("users").update({ subscribed: true }).eq("id", currentUser.id);
+    setCurrentUser((u) => ({ ...u, subscribed: true }));
     setScreen("halls"); showToast("Obuna faollashtirildi!");
   }
-  function fakePay() {
-    update((d) => { d.users = d.users.map((u) => (u.id === currentUser.id ? { ...u, subscribed: true } : u)); return d; });
-    setScreen("halls"); showToast("To'lov qabul qilindi!");
-  }
+  // To'lov endi Telegram bot orqali (@Billiard_pos_bot) - admin qo'lda faollashtiradi
 
   // ---- halls/tables ----
-  function createHall(name) { update((d) => { d.hallsByUser[currentUser.id].push({ id: uid(), name, tables: [] }); return d; }); }
-  function renameHall(hallId, name) {
-    update((d) => { const h = d.hallsByUser[currentUser.id].find((x) => x.id === hallId); h.name = name; return d; });
+  async function createHall(name) { await supabase.from("halls").insert({ owner_id: currentUser.id, name }); await refreshOwnerData(); }
+  async function renameHall(hallId, name) { await supabase.from("halls").update({ name }).eq("id", hallId); await refreshOwnerData(); }
+  async function deleteHall(hallId) { await supabase.from("halls").delete().eq("id", hallId); await refreshOwnerData(); }
+  async function createTable(hallId, name, rate) { await supabase.from("billiard_tables").insert({ hall_id: hallId, name, rate, status: "free" }); await refreshOwnerData(); }
+  async function editTable(hallId, tableId, name, rate) { await supabase.from("billiard_tables").update({ name, rate }).eq("id", tableId); await refreshOwnerData(); }
+  async function deleteTable(hallId, tableId) { await supabase.from("billiard_tables").delete().eq("id", tableId); await refreshOwnerData(); }
+  async function startTable(hallId, tableId) {
+    await supabase.from("table_extras").delete().eq("table_id", tableId);
+    await supabase.from("billiard_tables").update({ status: "playing", start_time: new Date().toISOString() }).eq("id", tableId);
+    await refreshOwnerData();
   }
-  function deleteHall(hallId) {
-    update((d) => { d.hallsByUser[currentUser.id] = d.hallsByUser[currentUser.id].filter((x) => x.id !== hallId); return d; });
+  async function addExtra(hallId, tableId, extra) {
+    await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
+    await refreshOwnerData();
   }
-  function createTable(hallId, name, rate) {
-    update((d) => {
-      const h = d.hallsByUser[currentUser.id].find((x) => x.id === hallId);
-      h.tables.push({ id: uid(), name, rate, status: "free", startTime: null, extras: [] });
-      return d;
+  async function closeTable(hallId, tableId, record) {
+    const hall = halls.find((h) => h.id === hallId);
+    await supabase.from("session_history").insert({
+      owner_id: currentUser.id, hall_name: hall ? hall.name : "", table_name: record.tableName,
+      start_time: new Date(record.startTime).toISOString(), end_time: new Date(record.endTime).toISOString(),
+      duration_seconds: record.duration, table_cost: record.tableCost,
+      extras: record.extras, extras_cost: record.extrasCost, total: record.total,
     });
-  }
-  function editTable(hallId, tableId, name, rate) {
-    update((d) => {
-      const h = d.hallsByUser[currentUser.id].find((x) => x.id === hallId);
-      const t = h.tables.find((x) => x.id === tableId);
-      t.name = name; t.rate = rate; // status/startTime/extras untouched -> running session unaffected
-      return d;
-    });
-  }
-  function deleteTable(hallId, tableId) {
-    update((d) => {
-      const h = d.hallsByUser[currentUser.id].find((x) => x.id === hallId);
-      h.tables = h.tables.filter((x) => x.id !== tableId);
-      return d;
-    });
-  }
-  function startTable(hallId, tableId) {
-    update((d) => {
-      const h = d.hallsByUser[currentUser.id].find((x) => x.id === hallId);
-      const t = h.tables.find((x) => x.id === tableId);
-      t.status = "playing"; t.startTime = Date.now(); t.extras = [];
-      return d;
-    });
-  }
-  function addExtra(hallId, tableId, extra) {
-    update((d) => {
-      const h = d.hallsByUser[currentUser.id].find((x) => x.id === hallId);
-      const t = h.tables.find((x) => x.id === tableId);
-      t.extras.push({ ...extra, id: uid() });
-      return d;
-    });
-  }
-  function closeTable(hallId, tableId, record) {
-    update((d) => {
-      const h = d.hallsByUser[currentUser.id].find((x) => x.id === hallId);
-      const t = h.tables.find((x) => x.id === tableId);
-      t.status = "free"; t.startTime = null; t.extras = [];
-      d.historyByUser[currentUser.id].unshift({ ...record, hallName: h.name });
-      return d;
-    });
+    await supabase.from("table_extras").delete().eq("table_id", tableId);
+    await supabase.from("billiard_tables").update({ status: "free", start_time: null }).eq("id", tableId);
+    await refreshOwnerData();
   }
 
   // ---- bar ----
-  function addMenuItem(name, price) {
-    update((d) => {
-      d.barByUser[currentUser.id].push({ id: uid(), name, price, emoji: guessEmoji(name), color: colorFor(name) });
-      return d;
-    });
+  async function addMenuItem(name, price) {
+    await supabase.from("bar_items").insert({ owner_id: currentUser.id, name, price, emoji: guessEmoji(name), color: colorFor(name) });
+    await refreshOwnerData();
   }
-  function deleteMenuItem(itemId) {
-    update((d) => { d.barByUser[currentUser.id] = d.barByUser[currentUser.id].filter((x) => x.id !== itemId); return d; });
+  async function deleteMenuItem(itemId) { await supabase.from("bar_items").delete().eq("id", itemId); await refreshOwnerData(); }
+
+  // ---- chat (user side) ----
+  async function sendUserMessage(text) {
+    await supabase.from("chats").insert({ owner_id: currentUser.id, from_role: "user", message: text, read_by_admin: false, read_by_user: true });
+    await refreshMyChat();
+  }
+  async function markReadByUser() {
+    await supabase.from("chats").update({ read_by_user: true }).eq("owner_id", currentUser.id).eq("from_role", "admin").eq("read_by_user", false);
+    await refreshMyChat();
   }
 
-  // ---- staff ----
-  function addStaff(name, login, password, accountType) {
-    update((d) => {
-      const u = d.users.find((x) => x.id === currentUser.id);
-      u.staff.push({ id: uid(), name, login, password, accountType });
-      return d;
-    });
+  // ---- admin: chat ----
+  async function sendAdminMessage(targetId, text) {
+    if (targetId === "all") {
+      const rows = users.map((u) => ({ owner_id: u.id, from_role: "admin", message: text, broadcast: true, read_by_admin: true, read_by_user: false }));
+      if (rows.length > 0) await supabase.from("chats").insert(rows);
+    } else {
+      await supabase.from("chats").insert({ owner_id: targetId, from_role: "admin", message: text, read_by_admin: true, read_by_user: false });
+    }
+    await loadAdmin();
+  }
+  async function markReadByAdmin(userId) {
+    await supabase.from("chats").update({ read_by_admin: true }).eq("owner_id", userId).eq("from_role", "user").eq("read_by_admin", false);
+    await loadAdmin();
   }
 
-  // ---- chat ----
-  function sendUserMessage(text) {
-    update((d) => {
-      d.chats[currentUser.id] = d.chats[currentUser.id] || [];
-      d.chats[currentUser.id].push({ id: uid(), from: "user", text, ts: Date.now(), readByAdmin: false, readByUser: true });
-      return d;
-    });
+  // ---- admin: management ----
+  async function addPromo(code, expiry) {
+    await supabase.from("promo_codes").insert({ code, expiry: expiry ? new Date(expiry).toISOString() : null });
+    await loadAdmin();
   }
-  function markReadByUser() {
-    update((d) => {
-      (d.chats[currentUser.id] || []).forEach((m) => { m.readByUser = true; });
-      return d;
-    });
+  async function toggleUserSub(userId) {
+    const u = users.find((x) => x.id === userId);
+    await supabase.from("users").update({ subscribed: !u.subscribed }).eq("id", userId);
+    await loadAdmin();
   }
-  function sendAdminMessage(targetId, text) {
-    update((d) => {
-      if (targetId === "all") {
-        d.users.forEach((u) => {
-          d.chats[u.id] = d.chats[u.id] || [];
-          d.chats[u.id].push({ id: uid(), from: "admin", text, ts: Date.now(), readByAdmin: true, readByUser: false, broadcast: true });
-        });
-      } else {
-        d.chats[targetId] = d.chats[targetId] || [];
-        d.chats[targetId].push({ id: uid(), from: "admin", text, ts: Date.now(), readByAdmin: true, readByUser: false });
-      }
-      return d;
-    });
+  async function toggleVip(userId) {
+    const u = users.find((x) => x.id === userId);
+    await supabase.from("users").update({ account_type: u.accountType === "vip" ? "oddiy" : "vip" }).eq("id", userId);
+    await loadAdmin();
   }
-  function markReadByAdmin(userId) {
-    update((d) => {
-      (d.chats[userId] || []).forEach((m) => { m.readByAdmin = true; });
-      return d;
-    });
+  async function banUser(userId, days, hours, reason) {
+    const ms = (Number(days) || 0) * 86400000 + (Number(hours) || 0) * 3600000;
+    await supabase.from("users").update({ banned: true, ban_until: new Date(Date.now() + ms).toISOString(), ban_reason: reason }).eq("id", userId);
+    await loadAdmin();
   }
-
-  // ---- admin management ----
-  function addPromo(code, expiry) { update((d) => { d.promoCodes.push({ code, expiry, used: false, createdAt: Date.now() }); return d; }); }
-  function toggleUserSub(userId) { update((d) => { d.users = d.users.map((u) => (u.id === userId ? { ...u, subscribed: !u.subscribed } : u)); return d; }); }
-  function toggleVip(userId) {
-    update((d) => { d.users = d.users.map((u) => (u.id === userId ? { ...u, accountType: u.accountType === "vip" ? "oddiy" : "vip" } : u)); return d; });
+  async function unbanUser(userId) {
+    await supabase.from("users").update({ banned: false, ban_until: null, ban_reason: "" }).eq("id", userId);
+    await loadAdmin();
   }
-  function banUser(userId, days, reason) {
-    update((d) => { d.users = d.users.map((u) => (u.id === userId ? { ...u, banned: true, banUntil: Date.now() + days * 86400000, banReason: reason } : u)); return d; });
+  async function addAdmin(name, login, password) {
+    const { error } = await supabase.rpc("add_admin", { p_name: name, p_login: login, p_password: password });
+    if (error) { showToast("Xatolik: login band bo'lishi mumkin"); return; }
+    await loadAdmin();
   }
-  function unbanUser(userId) {
-    update((d) => { d.users = d.users.map((u) => (u.id === userId ? { ...u, banned: false, banUntil: null, banReason: "" } : u)); return d; });
+  async function deleteAdmin(login) {
+    if (login.toLowerCase() === "asliddin") { showToast("Bosh adminni o'chirib bo'lmaydi"); return; }
+    await supabase.from("admin_accounts").delete().eq("login", login);
+    await loadAdmin();
   }
-  function addAdmin(name, login, password) {
-    update((d) => { d.adminAccounts.push({ name, login, password, createdAt: Date.now() }); return d; });
+  async function deleteUser(userId) {
+    await supabase.from("users").delete().eq("id", userId);
+    await loadAdmin();
   }
-  function addUserDirect(name, phone, login, password, accountType) {
+  async function changeOwnPassword(oldPass, newPass) {
+    if (newPass.length < 8) { showToast("Yangi parol kamida 8 belgi bo'lishi kerak"); return; }
+    const { data, error } = await supabase.rpc("change_user_password", { p_user_id: currentUser.id, p_old_password: oldPass, p_new_password: newPass });
+    if (error || !data) { showToast("Eski parol noto'g'ri"); return; }
+    showToast("Parol muvaffaqiyatli yangilandi");
+  }
+  async function changeAdminPassword(oldPass, newPass) {
+    if (newPass.length < 8) { showToast("Yangi parol kamida 8 belgi bo'lishi kerak"); return; }
+    const { data, error } = await supabase.rpc("change_admin_password", { p_login: adminLogin, p_old_password: oldPass, p_new_password: newPass });
+    if (error || !data) { showToast("Eski parol noto'g'ri"); return; }
+    showToast("Parol muvaffaqiyatli yangilandi");
+  }
+  async function addUserDirect(name, phone, login, password, accountType) {
     const normPhone = normalizePhone(phone) || phone;
-    const id = uid();
-    update((d) => {
-      d.users.push({
-        id, name, phone: normPhone, login, password,
-        subscribed: accountType === "vip", accountType, banned: false, banUntil: null, banReason: "",
-        staff: [], createdAt: Date.now(),
-      });
-      d.hallsByUser[id] = []; d.barByUser[id] = []; d.historyByUser[id] = []; d.chats[id] = [];
-      return d;
-    });
+    const { data, error } = await supabase.rpc("register_user", { p_name: name, p_phone: normPhone, p_login: login, p_password: password });
+    if (error) { showToast(error.message.includes("LOGIN_TAKEN") ? "Bu login band" : "Xatolik yuz berdi"); return; }
+    const row = unwrapRpc(data);
+    await supabase.from("users").update({ account_type: accountType, subscribed: accountType === "vip" }).eq("id", row.id);
+    await loadAdmin();
+  }
+  async function viewUserPanel(user) {
+    setViewUserBasic(user); setViewUserLoading(true); setViewUserContent(null);
+    const d = await fetchOwnerData(user.id);
+    setViewUserContent(d); setViewUserLoading(false);
   }
 
   if (!loaded) {
     return <div style={{ background: FELT_DARK }} className="min-h-screen flex items-center justify-center">
-      <div style={{ color: CREAM }} className="font-mono text-sm">yuklanmoqda...</div>
+      <Loader2 className="animate-spin" style={{ color: GOLD }} size={28} />
     </div>;
   }
 
@@ -371,26 +437,18 @@ export default function BilliardPOS() {
       )}
 
       {screen === "auth" && <AuthScreen onRegister={handleRegister} onLogin={handleLogin} />}
-
-      {screen === "banned" && currentUser && (
-        <BannedScreen user={currentUser} onLogout={handleLogout} />
-      )}
-      {screen === "blocked" && (
-        <BlockedScreen onLogout={handleLogout} />
-      )}
-
-      {screen === "subscribe" && currentUser && (
-        <SubscribeScreen user={currentUser} onPromo={activatePromo} onPay={fakePay} onLogout={handleLogout} />
-      )}
+      {screen === "banned" && currentUser && <BannedScreen user={currentUser} onLogout={handleLogout} />}
+      {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} onPromo={activatePromo} onLogout={handleLogout} />}
 
       {screen === "halls" && currentUser && (
         <HallsScreen
-          user={currentUser} staffName={data.session.staffName} halls={halls} bar={bar}
+          user={currentUser} halls={halls} bar={bar}
           onCreateHall={createHall} onRenameHall={renameHall} onDeleteHall={deleteHall}
           onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem}
           onOpenHall={(id) => { setActiveHallId(id); setScreen("hall"); }}
-          onLogout={handleLogout} onStats={() => setScreen("stats")} onSupport={() => { markReadByUser(); setScreen("support"); }}
-          unreadCount={userUnreadCount}
+          onLogout={handleLogout} onStats={() => setScreen("stats")}
+          onSupport={() => { markReadByUser(); setScreen("support"); }}
+          unreadCount={userUnreadCount} onChangePassword={changeOwnPassword}
         />
       )}
 
@@ -408,19 +466,19 @@ export default function BilliardPOS() {
       )}
 
       {screen === "stats" && currentUser && <StatsScreen history={history} onBack={() => setScreen("halls")} />}
+      {screen === "support" && currentUser && <SupportScreen messages={myChat} onSend={sendUserMessage} onBack={() => setScreen("halls")} />}
 
-      {screen === "support" && currentUser && (
-        <SupportScreen messages={myChat} onSend={sendUserMessage} onBack={() => setScreen("halls")} />
-      )}
-
-      {screen === "admin" && data.session.isAdmin && (
+      {screen === "admin" && isAdmin && (
         <AdminScreen
-          users={data.users} promoCodes={data.promoCodes} chats={data.chats} adminAccounts={data.adminAccounts}
-          hallsByUser={data.hallsByUser} barByUser={data.barByUser} historyByUser={data.historyByUser}
+          users={users} promoCodes={promoCodes} chats={chatsByUser} adminAccounts={adminAccounts}
           onAddPromo={addPromo} onToggleSub={toggleUserSub} onToggleVip={toggleVip}
           onBan={banUser} onUnban={unbanUser} onAddAdmin={addAdmin} onAddUser={addUserDirect}
+          onDeleteAdmin={deleteAdmin} onDeleteUser={deleteUser} onChangePassword={changeAdminPassword}
+          isSuperAdmin={(adminLogin || "").toLowerCase() === "asliddin"}
           onSendMessage={sendAdminMessage} onOpenChat={markReadByAdmin} adminUnreadUserCount={adminUnreadUserCount}
           onLogout={handleLogout}
+          viewUserBasic={viewUserBasic} viewUserContent={viewUserContent} viewUserLoading={viewUserLoading}
+          onViewUser={viewUserPanel} onCloseView={() => { setViewUserBasic(null); setViewUserContent(null); }}
         />
       )}
     </div>
@@ -463,6 +521,32 @@ function AuthScreen({ onRegister, onLogin }) {
   const [tab, setTab] = useState("login");
   const [name, setName] = useState(""); const [phone, setPhone] = useState("");
   const [login, setLogin] = useState(""); const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [loginTaken, setLoginTaken] = useState(false);
+  const [checkingLogin, setCheckingLogin] = useState(false);
+
+  useEffect(() => {
+    if (tab !== "register" || !login.trim()) { setLoginTaken(false); return; }
+    setCheckingLogin(true);
+    const t = setTimeout(async () => {
+      const [u, a] = await Promise.all([
+        supabase.from("users").select("login").ilike("login", login.trim()).limit(1),
+        supabase.from("admin_accounts").select("login").ilike("login", login.trim()).limit(1),
+      ]);
+      setLoginTaken((u.data && u.data.length > 0) || (a.data && a.data.length > 0));
+      setCheckingLogin(false);
+    }, 450);
+    return () => clearTimeout(t);
+  }, [login, tab]);
+
+  async function doRegister() {
+    if (loginTaken) return;
+    if (password.length < 8) return;
+    setBusy(true); await onRegister({ name, phone, login, password }); setBusy(false);
+  }
+  async function doLogin() { setBusy(true); await onLogin(login, password); setBusy(false); }
+
+  const showPassWarning = password.length > 0 && password.length < 8;
 
   return (
     <div className="min-h-screen flex items-center justify-center px-5 py-10">
@@ -477,11 +561,14 @@ function AuthScreen({ onRegister, onLogin }) {
         <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl p-6">
           {tab === "login" ? (
             <>
-              <h1 className="font-display text-xl font-semibold mb-5" style={{ color: CREAM }}>Tizimga kirish</h1>
+              <h1 className="font-display text-xl font-semibold mb-1" style={{ color: CREAM }}>Tizimga kirish</h1>
+              <p className="text-xs mb-4" style={{ color: "#8fa398" }}>Admin bo'lsangiz, login maydonini bo'sh qoldirib faqat parolni kiriting</p>
               <Field label="Login" value={login} onChange={setLogin} />
               <Field label="Parol" value={password} onChange={setPassword} type="password" />
-              <button onClick={() => onLogin(login, password)} style={{ background: GOLD, color: FELT_DARK }}
-                className="w-full py-3 rounded-xl font-semibold text-sm font-display mt-2">Kirish</button>
+              <button disabled={busy} onClick={doLogin} style={{ background: GOLD, color: FELT_DARK }}
+                className="w-full py-3 rounded-xl font-semibold text-sm font-display mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {busy && <Loader2 size={15} className="animate-spin" />} Kirish
+              </button>
             </>
           ) : (
             <>
@@ -489,10 +576,25 @@ function AuthScreen({ onRegister, onLogin }) {
               <p className="text-sm mb-5" style={{ color: "#b8c9bf" }}>Billiardxonangizni boshqarishni boshlang</p>
               <Field label="Ism" value={name} onChange={setName} />
               <Field label="Telefon (+998991234567)" value={phone} onChange={setPhone} />
-              <Field label="Login" value={login} onChange={setLogin} />
-              <Field label="Parol (kamida 4 belgi)" value={password} onChange={setPassword} type="password" />
-              <button onClick={() => onRegister({ name, phone, login, password })} style={{ background: GOLD, color: FELT_DARK }}
-                className="w-full py-3 rounded-xl font-semibold text-sm font-display mt-2">Ro'yxatdan o'tish</button>
+              <div className="mb-3">
+                <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Login</div>
+                <input value={login} onChange={(e) => setLogin(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl outline-none text-sm"
+                  style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${loginTaken ? RED : FELT_LIGHT}` }} />
+                {loginTaken && <div className="text-xs mt-1" style={{ color: "#ff8a8a" }}>Bu login band, boshqasini tanlang</div>}
+              </div>
+              <div className="mb-3">
+                <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Parol</div>
+                <input value={password} onChange={(e) => setPassword(e.target.value)} type="password"
+                  className="w-full px-4 py-3 rounded-xl outline-none text-sm"
+                  style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${showPassWarning ? RED : FELT_LIGHT}` }} />
+                <div className="text-xs mt-1" style={{ color: showPassWarning ? "#ff8a8a" : "#8fa398" }}>Parol kamida 8 belgidan iborat bo'lishi kerak</div>
+              </div>
+              <button disabled={busy || loginTaken || checkingLogin || password.length < 8 || !name.trim() || !login.trim()}
+                onClick={doRegister} style={{ background: GOLD, color: FELT_DARK }}
+                className="w-full py-3 rounded-xl font-semibold text-sm font-display mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {busy && <Loader2 size={15} className="animate-spin" />} Ro'yxatdan o'tish
+              </button>
             </>
           )}
         </div>
@@ -515,38 +617,51 @@ function BannedScreen({ user, onLogout }) {
     </div>
   );
 }
-function BlockedScreen({ onLogout }) {
-  return (
-    <div className="min-h-screen flex items-center justify-center px-5 text-center">
-      <div>
-        <p className="text-sm mb-6" style={{ color: "#b8c9bf" }}>Obuna faol emas. Administratorga murojaat qiling.</p>
-        <button onClick={onLogout} className="text-sm underline" style={{ color: GOLD }}>Chiqish</button>
-      </div>
-    </div>
-  );
-}
 
 // ---------------- SUBSCRIBE ----------------
-function SubscribeScreen({ user, onPromo, onPay, onLogout }) {
+function SubscribeScreen({ user, onPromo, onLogout }) {
   const [code, setCode] = useState("");
+  const BOT = "https://t.me/Billiard_pos_bot";
   return (
-    <div className="min-h-screen flex items-center justify-center px-5">
+    <div className="min-h-screen flex items-center justify-center px-5 py-10">
       <div className="w-full max-w-sm">
         <div className="flex justify-between items-center mb-6">
           <p className="text-sm" style={{ color: "#b8c9bf" }}>Xush kelibsiz, <span style={{ color: CREAM }} className="font-medium">{user.name}</span></p>
           <button onClick={onLogout} className="text-xs opacity-60 flex items-center gap-1" style={{ color: CREAM }}><LogOut size={13} /> Chiqish</button>
         </div>
-        <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl p-6 mb-4">
-          <div className="text-xs mb-3 px-3 py-1.5 rounded-full inline-block" style={{ background: "rgba(178,58,58,0.15)", color: "#e88" }}>
-            Davom etish uchun obuna kerak
-          </div>
-          <div className="flex items-baseline gap-2 mb-1">
-            <span className="font-display text-3xl font-bold" style={{ color: GOLD }}>149 000</span>
-            <span className="text-sm" style={{ color: "#b8c9bf" }}>so'm / oy</span>
-          </div>
-          <p className="text-sm mb-5" style={{ color: "#b8c9bf" }}>Cheklovsiz zal, stol va bar boshqaruvi</p>
-          <button onClick={onPay} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm font-display">To'lovni amalga oshirish</button>
+        <div className="text-xs mb-3 px-3 py-1.5 rounded-full inline-block" style={{ background: "rgba(178,58,58,0.15)", color: "#e88" }}>
+          Davom etish uchun obuna kerak
         </div>
+
+        <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl p-6 mb-3">
+          <div className="flex items-baseline gap-2 mb-1">
+            <span className="font-display text-2xl font-bold" style={{ color: GOLD }}>150 000</span>
+            <span className="text-sm" style={{ color: "#b8c9bf" }}>so'm / 1 oy</span>
+          </div>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Cheklovsiz zal, stol va bar boshqaruvi</p>
+          <a href={`${BOT}?start=1oy`} target="_blank" rel="noopener noreferrer"
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm font-display block text-center">
+            To'lov qilish
+          </a>
+        </div>
+
+        <div style={{ background: FELT, border: `1px solid ${GOLD}` }} className="rounded-2xl p-6 mb-4 relative">
+          <span className="absolute -top-2.5 right-4 text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: GOLD, color: FELT_DARK }}>TEJAMLI</span>
+          <div className="flex items-baseline gap-2 mb-1">
+            <span className="font-display text-2xl font-bold" style={{ color: GOLD }}>400 000</span>
+            <span className="text-sm" style={{ color: "#b8c9bf" }}>so'm / 3 oy</span>
+          </div>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>3 oylik obuna, oyiga arzonroq tushadi</p>
+          <a href={`${BOT}?start=3oy`} target="_blank" rel="noopener noreferrer"
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm font-display block text-center">
+            To'lov qilish
+          </a>
+        </div>
+
+        <p className="text-xs text-center mb-4" style={{ color: "#8fa398" }}>
+          Tugmani bosgach @Billiard_pos_bot ochiladi — u yerda to'lov cheki yuborasiz, tasdiqlangach obunangiz faollashadi.
+        </p>
+
         <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl p-6">
           <div className="flex items-center gap-2 mb-3"><Ticket size={16} style={{ color: GOLD }} /><span className="text-sm font-medium" style={{ color: CREAM }}>Promokodingiz bormi?</span></div>
           <div className="flex gap-2">
@@ -561,7 +676,7 @@ function SubscribeScreen({ user, onPromo, onPay, onLogout }) {
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, staffName, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onOpenHall, onLogout, onStats, onSupport, unreadCount }) {
+function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onOpenHall, onLogout, onStats, onSupport, unreadCount, onChangePassword }) {
   const [tab, setTab] = useState("halls");
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -569,12 +684,15 @@ function HallsScreen({ user, staffName, halls, bar, onCreateHall, onRenameHall, 
   const [editName, setEditName] = useState("");
   const [menuName, setMenuName] = useState("");
   const [menuPrice, setMenuPrice] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [oldPass, setOldPass] = useState(""); const [newPass, setNewPass] = useState("");
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <Logo />
         <div className="flex items-center gap-4">
+          <button onClick={() => setShowPass(true)} title="Sozlamalar"><Settings size={18} style={{ color: "#b8c9bf" }} /></button>
           <button onClick={onSupport} title="Yordam" className="relative">
             <MessageCircle size={18} style={{ color: "#b8c9bf" }} />
             {unreadCount > 0 && (
@@ -587,7 +705,18 @@ function HallsScreen({ user, staffName, halls, bar, onCreateHall, onRenameHall, 
           <button onClick={onLogout} title="Chiqish"><LogOut size={18} style={{ color: "#b8c9bf" }} /></button>
         </div>
       </div>
-      <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {staffName ? `${staffName} (${user.name})` : user.name}</p>
+      <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
+
+      {showPass && (
+        <Modal onClose={() => { setShowPass(false); setOldPass(""); setNewPass(""); }}>
+          <h2 className="font-display text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: CREAM }}><KeyRound size={18} /> Parolni almashtirish</h2>
+          <Field label="Eski parol" value={oldPass} onChange={setOldPass} type="password" />
+          <Field label="Yangi parol (kamida 8 belgi)" value={newPass} onChange={setNewPass} type="password" />
+          <button disabled={!oldPass || newPass.length < 8}
+            onClick={() => { onChangePassword(oldPass, newPass); setOldPass(""); setNewPass(""); setShowPass(false); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">Saqlash</button>
+        </Modal>
+      )}
 
       <div className="flex mb-6 rounded-xl overflow-hidden" style={{ border: `1px solid ${FELT_LIGHT}` }}>
         <button onClick={() => setTab("halls")} className="flex-1 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
@@ -640,7 +769,7 @@ function HallsScreen({ user, staffName, halls, bar, onCreateHall, onRenameHall, 
           <div className="grid grid-cols-2 gap-2">
             {bar.length === 0 && <p className="text-sm opacity-50 col-span-2" style={{ color: CREAM }}>Hali mahsulot yo'q</p>}
             {bar.map((item) => (
-              <div key={item.id} style={{ background: FELT, borderLeft: `4px solid ${item.color}`, border: `1px solid ${FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: item.color }} className="rounded-xl p-3 flex items-center justify-between">
+              <div key={item.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: item.color }} className="rounded-xl p-3 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span style={{ fontSize: 20 }}>{item.emoji}</span>
                   <div>
@@ -677,7 +806,6 @@ function HallsScreen({ user, staffName, halls, bar, onCreateHall, onRenameHall, 
     </div>
   );
 }
-
 
 // ---------------- HALL ----------------
 function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onAddExtra, onClose }) {
@@ -785,7 +913,7 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
             {filteredBar.length === 0 && <p className="text-xs col-span-2 opacity-60" style={{ color: CREAM }}>Bar bo'sh. "Bar" bo'limidan mahsulot qo'shing.</p>}
             {filteredBar.map((e) => (
               <button key={e.id} onClick={() => onAddExtra(activeTable.id, { name: e.name, price: e.price })}
-                style={{ background: FELT_DARK, borderLeft: `4px solid ${e.color}`, border: `1px solid ${FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: e.color }}
+                style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: e.color }}
                 className="p-3 rounded-xl text-left flex items-center gap-2">
                 <span style={{ fontSize: 18 }}>{e.emoji}</span>
                 <div>
@@ -819,7 +947,7 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
           <ReceiptView title={`${hall.name} · ${receipt.table.name}`} start={receipt.startTime} end={receipt.endTime}
             duration={receipt.duration} tableCost={receipt.tableCost} extras={receipt.extras} extrasCost={receipt.extrasCost} />
           <button onClick={() => {
-            onClose(receipt.table.id, { id: uid(), tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost });
+            onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost });
             setReceipt(null);
           }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 mt-2">
             <Check size={16} /> Tasdiqlash
@@ -844,7 +972,7 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
       {extras.length > 0 && (
         <>
           <div className="border-t border-dashed py-2 mb-1" style={{ borderColor: FELT_LIGHT }} />
-          {extras.map((e) => <div key={e.id} className="flex justify-between text-sm mb-1.5" style={{ color: "#b8c9bf" }}><span>{e.name}</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(e.price)}</span></div>)}
+          {extras.map((e, i) => <div key={e.id || i} className="flex justify-between text-sm mb-1.5" style={{ color: "#b8c9bf" }}><span>{e.name}</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(e.price)}</span></div>)}
         </>
       )}
       <div className="border-t pb-3 mt-3 mb-3" style={{ borderColor: FELT_LIGHT }} />
@@ -953,13 +1081,14 @@ function SupportScreen({ messages, onSend, onBack }) {
 }
 
 // ---------------- ADMIN ----------------
-function AdminScreen({ users, promoCodes, chats, adminAccounts, hallsByUser, barByUser, historyByUser, onAddPromo, onToggleSub, onToggleVip, onBan, onUnban, onAddAdmin, onAddUser, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout }) {
+function AdminScreen({ users, promoCodes, chats, adminAccounts, onAddPromo, onToggleSub, onToggleVip, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
   const [tab, setTab] = useState("stats");
   const [code, setCode] = useState("");
   const [expiryMode, setExpiryMode] = useState("30");
   const [customDate, setCustomDate] = useState("");
   const [banTarget, setBanTarget] = useState(null);
   const [banDays, setBanDays] = useState("3");
+  const [banHours, setBanHours] = useState("0");
   const [banReason, setBanReason] = useState("");
   const [chatUser, setChatUser] = useState(null);
   const [msgText, setMsgText] = useState("");
@@ -968,7 +1097,9 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, hallsByUser, bar
   const [newAdminName, setNewAdminName] = useState(""); const [newAdminLogin, setNewAdminLogin] = useState(""); const [newAdminPass, setNewAdminPass] = useState("");
   const [showNewUser, setShowNewUser] = useState(false);
   const [nuName, setNuName] = useState(""); const [nuPhone, setNuPhone] = useState(""); const [nuLogin, setNuLogin] = useState(""); const [nuPass, setNuPass] = useState(""); const [nuType, setNuType] = useState("oddiy");
-  const [viewUser, setViewUser] = useState(null);
+  const [showPass, setShowPass] = useState(false);
+  const [oldPass, setOldPass] = useState(""); const [newPass, setNewPass] = useState("");
+  const [deleteUserTarget, setDeleteUserTarget] = useState(null);
 
   const subscribed = users.filter((u) => u.subscribed || u.accountType === "vip").length;
   const vipCount = users.filter((u) => u.accountType === "vip").length;
@@ -978,8 +1109,22 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, hallsByUser, bar
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2"><ShieldCheck size={20} style={{ color: GOLD }} /><span className="font-display text-lg font-semibold" style={{ color: CREAM }}>Billiard POS — Admin</span></div>
-        <button onClick={onLogout}><LogOut size={18} style={{ color: "#b8c9bf" }} /></button>
+        <div className="flex items-center gap-3">
+          <button onClick={() => setShowPass(true)} title="Parolni almashtirish"><Settings size={18} style={{ color: "#b8c9bf" }} /></button>
+          <button onClick={onLogout}><LogOut size={18} style={{ color: "#b8c9bf" }} /></button>
+        </div>
       </div>
+
+      {showPass && (
+        <Modal onClose={() => { setShowPass(false); setOldPass(""); setNewPass(""); }}>
+          <h2 className="font-display text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: CREAM }}><KeyRound size={18} /> Parolni almashtirish</h2>
+          <Field label="Eski parol" value={oldPass} onChange={setOldPass} type="password" />
+          <Field label="Yangi parol (kamida 8 belgi)" value={newPass} onChange={setNewPass} type="password" />
+          <button disabled={!oldPass || newPass.length < 8}
+            onClick={() => { onChangePassword(oldPass, newPass); setOldPass(""); setNewPass(""); setShowPass(false); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">Saqlash</button>
+        </Modal>
+      )}
 
       <div className="flex gap-2 mb-6 flex-wrap">
         {[["stats", "Statistika"], ["users", "Foydalanuvchilar"], ["promo", "Promokodlar"], ["messages", "Xabarlar"], ["admins", "Adminlar"]].map(([k, l]) => (
@@ -1006,17 +1151,19 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, hallsByUser, bar
 
       {tab === "users" && (
         <div className="space-y-2">
-          <button onClick={() => setShowNewUser(true)} className="w-full py-2.5 rounded-xl text-sm font-medium mb-2 flex items-center justify-center gap-2"
-            style={{ background: FELT, border: `1px dashed ${FELT_LIGHT}`, color: GOLD }}>
-            <UserPlus size={15} /> Yangi foydalanuvchi yaratish
-          </button>
+          {isSuperAdmin && (
+            <button onClick={() => setShowNewUser(true)} className="w-full py-2.5 rounded-xl text-sm font-medium mb-2 flex items-center justify-center gap-2"
+              style={{ background: FELT, border: `1px dashed ${FELT_LIGHT}`, color: GOLD }}>
+              <UserPlus size={15} /> Yangi foydalanuvchi yaratish
+            </button>
+          )}
           {users.length === 0 && <p className="text-sm opacity-50" style={{ color: CREAM }}>Hali foydalanuvchi yo'q</p>}
           {users.map((u) => {
             const unread = (chats[u.id] || []).some((m) => m.from === "user" && !m.readByAdmin);
             return (
               <div key={u.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4">
                 <div className="flex items-center justify-between mb-1">
-                  <button onClick={() => setViewUser(u)} className="font-medium text-sm flex items-center gap-1.5 underline decoration-dotted" style={{ color: CREAM }}>
+                  <button onClick={() => onViewUser(u)} className="font-medium text-sm flex items-center gap-1.5 underline decoration-dotted" style={{ color: CREAM }}>
                     {u.name} {u.accountType === "vip" && <Crown size={13} style={{ color: GOLD }} />}
                   </button>
                   <div className="flex items-center gap-2">
@@ -1050,6 +1197,9 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, hallsByUser, bar
                       <Ban size={11} /> Ban berish
                     </button>
                   )}
+                  <button onClick={() => setDeleteUserTarget(u)} className="text-xs px-3 py-1.5 rounded-lg font-medium flex items-center gap-1" style={{ background: "rgba(178,58,58,0.15)", color: "#ff8a8a", border: `1px solid ${FELT_LIGHT}` }}>
+                    <Trash2 size={11} /> Butunlay o'chirish
+                  </button>
                 </div>
               </div>
             );
@@ -1140,20 +1290,31 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, hallsByUser, bar
 
       {tab === "admins" && (
         <div>
-          <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
-            <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi admin yaratish</div>
-            <Field label="Ism" value={newAdminName} onChange={setNewAdminName} />
-            <Field label="Login" value={newAdminLogin} onChange={setNewAdminLogin} />
-            <Field label="Parol" value={newAdminPass} onChange={setNewAdminPass} type="password" />
-            <button disabled={!newAdminName.trim() || !newAdminLogin.trim() || newAdminPass.length < 4}
-              onClick={() => { onAddAdmin(newAdminName.trim(), newAdminLogin.trim(), newAdminPass); setNewAdminName(""); setNewAdminLogin(""); setNewAdminPass(""); }}
-              style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">Yaratish</button>
-          </div>
+          {isSuperAdmin ? (
+            <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
+              <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi admin yaratish</div>
+              <Field label="Ism" value={newAdminName} onChange={setNewAdminName} />
+              <Field label="Login" value={newAdminLogin} onChange={setNewAdminLogin} />
+              <Field label="Parol (kamida 8 belgi)" value={newAdminPass} onChange={setNewAdminPass} type="password" />
+              <button disabled={!newAdminName.trim() || !newAdminLogin.trim() || newAdminPass.length < 8}
+                onClick={() => { onAddAdmin(newAdminName.trim(), newAdminLogin.trim(), newAdminPass); setNewAdminName(""); setNewAdminLogin(""); setNewAdminPass(""); }}
+                style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">Yaratish</button>
+            </div>
+          ) : (
+            <p className="text-xs mb-4 px-1" style={{ color: "#8fa398" }}>Yangi admin yaratish faqat bosh admin uchun mavjud</p>
+          )}
           <div className="space-y-2">
             {adminAccounts.map((a) => (
-              <div key={a.login} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3">
-                <div className="text-sm font-medium" style={{ color: CREAM }}>{a.name}</div>
-                <div className="text-xs font-mono" style={{ color: "#8fa398" }}>@{a.login}</div>
+              <div key={a.login} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium" style={{ color: CREAM }}>{a.name}</div>
+                  <div className="text-xs font-mono" style={{ color: "#8fa398" }}>@{a.login}</div>
+                </div>
+                {isSuperAdmin && a.login.toLowerCase() !== "asliddin" && (
+                  <button onClick={() => { if (confirm(`${a.name} adminini o'chirasizmi?`)) onDeleteAdmin(a.login); }}>
+                    <Trash2 size={15} style={{ color: RED }} />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -1163,12 +1324,31 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, hallsByUser, bar
       {banTarget && (
         <Modal onClose={() => setBanTarget(null)}>
           <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>{banTarget.name} — ban berish</h2>
-          <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Necha kunga</div>
-          <input value={banDays} onChange={(e) => setBanDays(e.target.value.replace(/[^0-9]/g, ""))} className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1">
+              <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Kun</div>
+              <input value={banDays} onChange={(e) => setBanDays(e.target.value.replace(/[^0-9]/g, ""))} className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+            </div>
+            <div className="flex-1">
+              <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Soat</div>
+              <input value={banHours} onChange={(e) => setBanHours(e.target.value.replace(/[^0-9]/g, ""))} className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+            </div>
+          </div>
           <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Sabab</div>
           <input value={banReason} onChange={(e) => setBanReason(e.target.value)} className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-          <button onClick={() => { onBan(banTarget.id, Number(banDays) || 1, banReason.trim()); setBanTarget(null); setBanDays("3"); setBanReason(""); }}
+          <button onClick={() => { onBan(banTarget.id, Number(banDays) || 0, Number(banHours) || 0, banReason.trim()); setBanTarget(null); setBanDays("3"); setBanHours("0"); setBanReason(""); }}
             style={{ background: RED, color: "#fff" }} className="w-full py-3 rounded-xl font-semibold text-sm">Ban berish</button>
+        </Modal>
+      )}
+
+      {deleteUserTarget && (
+        <Modal onClose={() => setDeleteUserTarget(null)}>
+          <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>{deleteUserTarget.name} ni butunlay o'chirasizmi?</h2>
+          <p className="text-sm mb-5" style={{ color: "#b8c9bf" }}>Bu akkaunt va uning barcha zallari, stollari, tarixi qaytarib bo'lmas tarzda o'chib ketadi.</p>
+          <div className="flex gap-2">
+            <button onClick={() => setDeleteUserTarget(null)} className="flex-1 py-3 rounded-xl text-sm" style={{ background: FELT_DARK, color: CREAM }}>Bekor</button>
+            <button onClick={() => { onDeleteUser(deleteUserTarget.id); setDeleteUserTarget(null); }} style={{ background: RED, color: "#fff" }} className="flex-1 py-3 rounded-xl text-sm font-semibold">O'chirish</button>
+          </div>
         </Modal>
       )}
 
@@ -1220,9 +1400,13 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, hallsByUser, bar
         </Modal>
       )}
 
-      {viewUser && (
-        <Modal onClose={() => setViewUser(null)} wide>
-          <UserPanelView user={viewUser} halls={hallsByUser[viewUser.id] || []} bar={barByUser[viewUser.id] || []} history={historyByUser[viewUser.id] || []} />
+      {viewUserBasic && (
+        <Modal onClose={onCloseView} wide>
+          {viewUserLoading || !viewUserContent ? (
+            <div className="flex items-center justify-center py-16"><Loader2 className="animate-spin" style={{ color: GOLD }} size={26} /></div>
+          ) : (
+            <UserPanelView user={viewUserBasic} halls={viewUserContent.halls} bar={viewUserContent.bar} history={viewUserContent.history} />
+          )}
         </Modal>
       )}
     </div>
