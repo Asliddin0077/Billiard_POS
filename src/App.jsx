@@ -561,8 +561,7 @@ function AuthScreen({ onRegister, onLogin }) {
         <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl p-6">
           {tab === "login" ? (
             <>
-              <h1 className="font-display text-xl font-semibold mb-1" style={{ color: CREAM }}>Tizimga kirish</h1>
-              <p className="text-xs mb-4" style={{ color: "#8fa398" }}>Admin bo'lsangiz, login maydonini bo'sh qoldirib faqat parolni kiriting</p>
+              <h1 className="font-display text-xl font-semibold mb-5" style={{ color: CREAM }}>Tizimga kirish</h1>
               <Field label="Login" value={login} onChange={setLogin} />
               <Field label="Parol" value={password} onChange={setPassword} type="password" />
               <button disabled={busy} onClick={doLogin} style={{ background: GOLD, color: FELT_DARK }}
