@@ -95,6 +95,7 @@ function mapHistory(row) {
 function mapPromo(row) { return { code: row.code, expiry: row.expiry ? new Date(row.expiry).getTime() : null, used: row.used, usedBy: row.used_by }; }
 function mapChat(row) { return { id: row.id, ownerId: row.owner_id, from: row.from_role, text: row.message, broadcast: row.broadcast, readByAdmin: row.read_by_admin, readByUser: row.read_by_user, ts: new Date(row.created_at).getTime() }; }
 function mapAdmin(row) { return { login: row.login, name: row.name, createdAt: new Date(row.created_at).getTime() }; }
+function mapPlan(row) { return { id: row.id, label: row.label, months: Number(row.months), days: row.days, price: Number(row.price), active: row.active }; }
 
 // ---------------- data fetch helpers ----------------
 async function fetchOwnerData(ownerId) {
@@ -148,6 +149,7 @@ export default function BilliardPOS() {
   const [promoCodes, setPromoCodes] = useState([]);
   const [adminAccounts, setAdminAccounts] = useState([]);
   const [chatsByUser, setChatsByUser] = useState({});
+  const [plans, setPlans] = useState([]);
 
   const [viewUserBasic, setViewUserBasic] = useState(null);
   const [viewUserContent, setViewUserContent] = useState(null);
@@ -160,6 +162,8 @@ export default function BilliardPOS() {
   useEffect(() => {
     (async () => {
       try {
+        const { data: planRows } = await supabase.from("subscription_plans").select("*").eq("active", true).order("days");
+        setPlans((planRows || []).map(mapPlan));
         const raw = localStorage.getItem(SESSION_KEY);
         if (raw) {
           const s = JSON.parse(raw);
@@ -352,6 +356,20 @@ export default function BilliardPOS() {
   }
 
   // ---- admin: management ----
+  async function fetchPlans() {
+    const { data } = await supabase.from("subscription_plans").select("*").eq("active", true).order("days");
+    setPlans((data || []).map(mapPlan));
+  }
+  async function addPlan(months, price) {
+    const days = Math.round(Number(months) * 30);
+    const label = `${months} oylik`;
+    await supabase.from("subscription_plans").insert({ label, months: Number(months), days, price: Number(price) });
+    await fetchPlans();
+  }
+  async function deletePlan(id) {
+    await supabase.from("subscription_plans").update({ active: false }).eq("id", id);
+    await fetchPlans();
+  }
   async function addPromo(code, expiry) {
     await supabase.from("promo_codes").insert({ code, expiry: expiry ? new Date(expiry).toISOString() : null });
     await loadAdmin();
@@ -438,7 +456,7 @@ export default function BilliardPOS() {
 
       {screen === "auth" && <AuthScreen onRegister={handleRegister} onLogin={handleLogin} />}
       {screen === "banned" && currentUser && <BannedScreen user={currentUser} onLogout={handleLogout} />}
-      {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} onPromo={activatePromo} onLogout={handleLogout} />}
+      {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} plans={plans} onPromo={activatePromo} onLogout={handleLogout} />}
 
       {screen === "halls" && currentUser && (
         <HallsScreen
@@ -471,6 +489,7 @@ export default function BilliardPOS() {
       {screen === "admin" && isAdmin && (
         <AdminScreen
           users={users} promoCodes={promoCodes} chats={chatsByUser} adminAccounts={adminAccounts}
+          plans={plans} onAddPlan={addPlan} onDeletePlan={deletePlan}
           onAddPromo={addPromo} onToggleSub={toggleUserSub} onToggleVip={toggleVip}
           onBan={banUser} onUnban={unbanUser} onAddAdmin={addAdmin} onAddUser={addUserDirect}
           onDeleteAdmin={deleteAdmin} onDeleteUser={deleteUser} onChangePassword={changeAdminPassword}
@@ -618,7 +637,7 @@ function BannedScreen({ user, onLogout }) {
 }
 
 // ---------------- SUBSCRIBE ----------------
-function SubscribeScreen({ user, onPromo, onLogout }) {
+function SubscribeScreen({ user, plans, onPromo, onLogout }) {
   const [code, setCode] = useState("");
   const BOT = "https://t.me/Billiard_pos_bot";
   return (
@@ -632,30 +651,26 @@ function SubscribeScreen({ user, onPromo, onLogout }) {
           Davom etish uchun obuna kerak
         </div>
 
-        <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl p-6 mb-3">
-          <div className="flex items-baseline gap-2 mb-1">
-            <span className="font-display text-2xl font-bold" style={{ color: GOLD }}>150 000</span>
-            <span className="text-sm" style={{ color: "#b8c9bf" }}>so'm / 1 oy</span>
-          </div>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Cheklovsiz zal, stol va bar boshqaruvi</p>
-          <a href={`${BOT}?start=1oy`} target="_blank" rel="noopener noreferrer"
-            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm font-display block text-center">
-            To'lov qilish
-          </a>
-        </div>
-
-        <div style={{ background: FELT, border: `1px solid ${GOLD}` }} className="rounded-2xl p-6 mb-4 relative">
-          <span className="absolute -top-2.5 right-4 text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: GOLD, color: FELT_DARK }}>TEJAMLI</span>
-          <div className="flex items-baseline gap-2 mb-1">
-            <span className="font-display text-2xl font-bold" style={{ color: GOLD }}>400 000</span>
-            <span className="text-sm" style={{ color: "#b8c9bf" }}>so'm / 3 oy</span>
-          </div>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>3 oylik obuna, oyiga arzonroq tushadi</p>
-          <a href={`${BOT}?start=3oy`} target="_blank" rel="noopener noreferrer"
-            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm font-display block text-center">
-            To'lov qilish
-          </a>
-        </div>
+        {plans.length === 0 && (
+          <p className="text-sm mb-4" style={{ color: "#8fa398" }}>Hozircha tariflar sozlanmagan. Birozdan so'ng qayta urinib ko'ring.</p>
+        )}
+        {plans.map((p, i) => {
+          const cheapest = plans.length > 1 && p.price === Math.min(...plans.map((x) => x.price));
+          const bestValue = plans.length > 1 && p === plans[plans.length - 1];
+          return (
+            <div key={p.id} style={{ background: FELT, border: `1px solid ${bestValue ? GOLD : FELT_LIGHT}` }} className="rounded-2xl p-6 mb-3 relative">
+              {bestValue && <span className="absolute -top-2.5 right-4 text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: GOLD, color: FELT_DARK }}>TEJAMLI</span>}
+              <div className="flex items-baseline gap-2 mb-1">
+                <span className="font-display text-2xl font-bold" style={{ color: GOLD }}>{fmtMoney(p.price)}</span>
+              </div>
+              <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>{p.label} obuna</p>
+              <a href={`${BOT}?start=${p.id}`} target="_blank" rel="noopener noreferrer"
+                style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm font-display block text-center">
+                To'lov qilish
+              </a>
+            </div>
+          );
+        })}
 
         <p className="text-xs text-center mb-4" style={{ color: "#8fa398" }}>
           Tugmani bosgach @Billiard_pos_bot ochiladi — u yerda to'lov cheki yuborasiz, tasdiqlangach obunangiz faollashadi.
@@ -1080,7 +1095,7 @@ function SupportScreen({ messages, onSend, onBack }) {
 }
 
 // ---------------- ADMIN ----------------
-function AdminScreen({ users, promoCodes, chats, adminAccounts, onAddPromo, onToggleSub, onToggleVip, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
+function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan, onDeletePlan, onAddPromo, onToggleSub, onToggleVip, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
   const [tab, setTab] = useState("stats");
   const [code, setCode] = useState("");
   const [expiryMode, setExpiryMode] = useState("30");
@@ -1099,6 +1114,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, onAddPromo, onTo
   const [showPass, setShowPass] = useState(false);
   const [oldPass, setOldPass] = useState(""); const [newPass, setNewPass] = useState("");
   const [deleteUserTarget, setDeleteUserTarget] = useState(null);
+  const [planMonths, setPlanMonths] = useState(""); const [planPrice, setPlanPrice] = useState("");
 
   const subscribed = users.filter((u) => u.subscribed || u.accountType === "vip").length;
   const vipCount = users.filter((u) => u.accountType === "vip").length;
@@ -1126,7 +1142,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, onAddPromo, onTo
       )}
 
       <div className="flex gap-2 mb-6 flex-wrap">
-        {[["stats", "Statistika"], ["users", "Foydalanuvchilar"], ["promo", "Promokodlar"], ["messages", "Xabarlar"], ["admins", "Adminlar"]].map(([k, l]) => (
+        {[["stats", "Statistika"], ["users", "Foydalanuvchilar"], ["plans", "Tariflar"], ["promo", "Promokodlar"], ["messages", "Xabarlar"], ["admins", "Adminlar"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} className="px-3.5 py-2 rounded-full text-xs font-medium relative"
             style={{ background: tab === k ? GOLD : FELT, color: tab === k ? FELT_DARK : "#b8c9bf", border: `1px solid ${FELT_LIGHT}` }}>
             {l}
@@ -1203,6 +1219,49 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, onAddPromo, onTo
               </div>
             );
           })}
+        </div>
+      )}
+
+      {tab === "plans" && (
+        <div>
+          {isSuperAdmin ? (
+            <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
+              <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi tarif qo'shish</div>
+              <div className="flex gap-2 mb-3">
+                <div className="flex-1">
+                  <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Necha oy</div>
+                  <input value={planMonths} onChange={(e) => setPlanMonths(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="masalan 6"
+                    className="w-full px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+                </div>
+                <div className="flex-1">
+                  <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Narxi (so'm)</div>
+                  <input value={planPrice} onChange={(e) => setPlanPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="masalan 700000"
+                    className="w-full px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+                </div>
+              </div>
+              <button disabled={!planMonths || !planPrice}
+                onClick={() => { onAddPlan(planMonths, planPrice); setPlanMonths(""); setPlanPrice(""); }}
+                style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">Qo'shish</button>
+            </div>
+          ) : (
+            <p className="text-xs mb-4 px-1" style={{ color: "#8fa398" }}>Tarif qo'shish/o'chirish faqat bosh admin uchun mavjud</p>
+          )}
+          <div className="space-y-2">
+            {plans.length === 0 && <p className="text-sm opacity-50" style={{ color: CREAM }}>Hali tarif yo'q</p>}
+            {plans.map((p) => (
+              <div key={p.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="flex items-center justify-between px-4 py-3 rounded-xl">
+                <div>
+                  <div className="text-sm font-medium" style={{ color: CREAM }}>{p.label}</div>
+                  <div className="text-xs font-mono" style={{ color: GOLD }}>{fmtMoney(p.price)}</div>
+                </div>
+                {isSuperAdmin && (
+                  <button onClick={() => { if (confirm(`"${p.label}" tarifini o'chirasizmi?`)) onDeletePlan(p.id); }}>
+                    <Trash2 size={15} style={{ color: RED }} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
