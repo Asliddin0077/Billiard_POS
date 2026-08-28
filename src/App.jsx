@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
-  Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound
+  Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
+  StickyNote, Flag, CalendarRange
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -72,13 +73,19 @@ function mapUser(row) {
     subscribed: row.subscribed, accountType: row.account_type,
     banned: row.banned, banUntil: row.ban_until ? new Date(row.ban_until).getTime() : null,
     banReason: row.ban_reason || "", createdAt: new Date(row.created_at).getTime(),
+    subscriptionUntil: row.subscription_until ? new Date(row.subscription_until).getTime() : null,
   };
+}
+function mapLap(row) {
+  return { id: row.id, start: new Date(row.lap_start).getTime(), end: new Date(row.lap_end).getTime(), duration: Number(row.duration_seconds), comment: row.comment || "" };
 }
 function mapTable(row) {
   return {
     id: row.id, name: row.name, rate: Number(row.rate), status: row.status,
     startTime: row.start_time ? new Date(row.start_time).getTime() : null,
+    note: row.note || "",
     extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price) })),
+    laps: (row.table_laps || []).map(mapLap).sort((a, b) => a.end - b.end),
   };
 }
 function mapHall(row) { return { id: row.id, name: row.name, tables: (row.billiard_tables || []).map(mapTable) }; }
@@ -90,6 +97,8 @@ function mapHistory(row) {
     duration: Number(row.duration_seconds), tableCost: Number(row.table_cost),
     extras: (row.extras || []).map((e) => ({ ...e, price: Number(e.price) })),
     extrasCost: Number(row.extras_cost), total: Number(row.total),
+    laps: (row.laps || []).map((l) => ({ ...l, cost: Number(l.cost || 0) })),
+    generalNote: row.general_note || "",
   };
 }
 function mapPromo(row) { return { code: row.code, expiry: row.expiry ? new Date(row.expiry).getTime() : null, used: row.used, usedBy: row.used_by }; }
@@ -100,7 +109,7 @@ function mapPlan(row) { return { id: row.id, label: row.label, months: Number(ro
 // ---------------- data fetch helpers ----------------
 async function fetchOwnerData(ownerId) {
   const [hallsRes, barRes, histRes, chatRes] = await Promise.all([
-    supabase.from("halls").select("*, billiard_tables(*, table_extras(*))").eq("owner_id", ownerId).order("created_at"),
+    supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at"),
     supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
     supabase.from("chats").select("*").eq("owner_id", ownerId).order("created_at"),
@@ -303,23 +312,53 @@ export default function BilliardPOS() {
   async function deleteTable(hallId, tableId) { await supabase.from("billiard_tables").delete().eq("id", tableId); await refreshOwnerData(); }
   async function startTable(hallId, tableId) {
     await supabase.from("table_extras").delete().eq("table_id", tableId);
-    await supabase.from("billiard_tables").update({ status: "playing", start_time: new Date().toISOString() }).eq("id", tableId);
+    await supabase.from("table_laps").delete().eq("table_id", tableId);
+    await supabase.from("billiard_tables").update({ status: "playing", start_time: new Date().toISOString(), note: null }).eq("id", tableId);
     await refreshOwnerData();
   }
   async function addExtra(hallId, tableId, extra) {
     await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
     await refreshOwnerData();
   }
+  async function updateTableNote(hallId, tableId, note) {
+    await supabase.from("billiard_tables").update({ note }).eq("id", tableId);
+    await refreshOwnerData();
+  }
+  async function addLap(hallId, tableId, comment) {
+    const hall = halls.find((h) => h.id === hallId);
+    const table = hall && hall.tables.find((t) => t.id === tableId);
+    if (!table || !table.startTime) return;
+    const lastEnd = table.laps.length > 0 ? Math.max(...table.laps.map((l) => l.end)) : table.startTime;
+    const now2 = Date.now();
+    const durationSeconds = Math.max(0, (now2 - lastEnd) / 1000);
+    await supabase.from("table_laps").insert({
+      table_id: tableId, lap_start: new Date(lastEnd).toISOString(), lap_end: new Date(now2).toISOString(),
+      duration_seconds: durationSeconds, comment: comment || null,
+    });
+    await refreshOwnerData();
+  }
   async function closeTable(hallId, tableId, record) {
     const hall = halls.find((h) => h.id === hallId);
+    const table = hall && hall.tables.find((t) => t.id === tableId);
+    const rate = table ? table.rate : 0;
+    const existingLaps = table ? table.laps : [];
+    const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
+    const finalDuration = Math.max(0, (record.endTime - lastCheckpoint) / 1000);
+    const finalLap = { start: lastCheckpoint, end: record.endTime, duration: finalDuration, comment: "", cost: (finalDuration / 3600) * rate };
+    const allLaps = [
+      ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
+      finalLap,
+    ];
     await supabase.from("session_history").insert({
       owner_id: currentUser.id, hall_name: hall ? hall.name : "", table_name: record.tableName,
       start_time: new Date(record.startTime).toISOString(), end_time: new Date(record.endTime).toISOString(),
       duration_seconds: record.duration, table_cost: record.tableCost,
       extras: record.extras, extras_cost: record.extrasCost, total: record.total,
+      laps: allLaps, general_note: (table && table.note) || null,
     });
     await supabase.from("table_extras").delete().eq("table_id", tableId);
-    await supabase.from("billiard_tables").update({ status: "free", start_time: null }).eq("id", tableId);
+    await supabase.from("table_laps").delete().eq("table_id", tableId);
+    await supabase.from("billiard_tables").update({ status: "free", start_time: null, note: null }).eq("id", tableId);
     await refreshOwnerData();
   }
 
@@ -480,6 +519,9 @@ export default function BilliardPOS() {
           onStart={(tid) => startTable(activeHallId, tid)}
           onAddExtra={(tid, extra) => addExtra(activeHallId, tid, extra)}
           onClose={(tid, record) => closeTable(activeHallId, tid, record)}
+          onUpdateNote={(tid, note) => updateTableNote(activeHallId, tid, note)}
+          onAddLap={(tid, comment) => addLap(activeHallId, tid, comment)}
+          onToast={showToast}
         />
       )}
 
@@ -822,7 +864,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
 }
 
 // ---------------- HALL ----------------
-function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onAddExtra, onClose }) {
+function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editTableObj, setEditTableObj] = useState(null);
   const [tName, setTName] = useState(""); const [tRate, setTRate] = useState("");
@@ -831,6 +873,11 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
   const [confirmStart, setConfirmStart] = useState(null);
   const [confirmClose, setConfirmClose] = useState(null);
   const [receipt, setReceipt] = useState(null);
+  const [noteTable, setNoteTable] = useState(null);
+  const [noteText, setNoteText] = useState("");
+  const [lapTable, setLapTable] = useState(null);
+  const [lapComment, setLapComment] = useState("");
+  const [justAdded, setJustAdded] = useState(null);
 
   if (!hall) return null;
   function elapsedSeconds(t) { return t.status !== "playing" || !t.startTime ? 0 : (now - t.startTime) / 1000; }
@@ -867,7 +914,23 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
               {playing ? (
                 <>
                   <div className="font-mono text-lg font-semibold mb-0.5" style={{ color: GOLD }}>{fmtDuration(elapsedSeconds(t))}</div>
-                  <div className="font-mono text-xs mb-3" style={{ color: CREAM }}>{fmtMoney(tableCost(t) + extrasTotal(t))}</div>
+                  <div className="font-mono text-xs mb-2" style={{ color: CREAM }}>{fmtMoney(tableCost(t) + extrasTotal(t))}</div>
+                  {t.note && (
+                    <div className="text-[11px] mb-2 px-2 py-1 rounded-lg flex items-center gap-1" style={{ background: "rgba(201,162,39,0.12)", color: GOLD }}>
+                      <StickyNote size={10} /> {t.note}
+                    </div>
+                  )}
+                  {t.laps.length > 0 && (
+                    <div className="text-[11px] mb-2" style={{ color: "#b8c9bf" }}>🚩 {t.laps.length} ta znak qo'yilgan</div>
+                  )}
+                  <div className="flex gap-1.5 mb-2">
+                    <button onClick={() => { setNoteTable(t); setNoteText(t.note || ""); }} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}>
+                      <StickyNote size={11} /> Izoh
+                    </button>
+                    <button onClick={() => { setLapTable(t); setLapComment(""); }} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: GOLD }}>
+                      <Flag size={11} /> Znak qo'yish
+                    </button>
+                  </div>
                   <div className="flex gap-2">
                     <button onClick={() => setActiveTable(t)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><ShoppingBasket size={13} /> Qo'shish</button>
                     <button onClick={() => setConfirmClose(t)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: RED, color: "#fff" }}>Yopish</button>
@@ -926,14 +989,15 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
           <div className="grid grid-cols-2 gap-2 mb-3 max-h-56 overflow-y-auto">
             {filteredBar.length === 0 && <p className="text-xs col-span-2 opacity-60" style={{ color: CREAM }}>Bar bo'sh. "Bar" bo'limidan mahsulot qo'shing.</p>}
             {filteredBar.map((e) => (
-              <button key={e.id} onClick={() => onAddExtra(activeTable.id, { name: e.name, price: e.price })}
-                style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: e.color }}
-                className="p-3 rounded-xl text-left flex items-center gap-2">
+              <button key={e.id} onClick={() => { onAddExtra(activeTable.id, { name: e.name, price: e.price }); onToast(`✅ ${e.name} qo'shildi`); setJustAdded(e.id); setTimeout(() => setJustAdded(null), 700); }}
+                style={{ background: justAdded === e.id ? "rgba(123,191,106,0.18)" : FELT_DARK, border: `1px solid ${justAdded === e.id ? "#7bbf6a" : FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: e.color }}
+                className="p-3 rounded-xl text-left flex items-center gap-2 relative transition-colors">
                 <span style={{ fontSize: 18 }}>{e.emoji}</span>
                 <div>
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{e.name}</div>
                   <div className="text-xs font-mono" style={{ color: e.color }}>{fmtMoney(e.price)}</div>
                 </div>
+                {justAdded === e.id && <Check size={16} className="absolute top-2 right-2" style={{ color: "#7bbf6a" }} />}
               </button>
             ))}
           </div>
@@ -949,17 +1013,47 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
             <button onClick={() => setConfirmClose(null)} className="flex-1 py-3 rounded-xl text-sm" style={{ background: FELT_DARK, color: CREAM }}>Bekor</button>
             <button onClick={() => {
               const endTime = Date.now();
-              setReceipt({ table: confirmClose, startTime: confirmClose.startTime, endTime, duration: elapsedSeconds(confirmClose), tableCost: tableCost(confirmClose), extras: confirmClose.extras, extrasCost: extrasTotal(confirmClose) });
+              const existingLaps = confirmClose.laps || [];
+              const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : confirmClose.startTime;
+              const finalDuration = Math.max(0, (endTime - lastCheckpoint) / 1000);
+              const rate = confirmClose.rate;
+              const previewLaps = [
+                ...existingLaps.map((l) => ({ duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
+                { duration: finalDuration, comment: "", cost: (finalDuration / 3600) * rate },
+              ];
+              setReceipt({ table: confirmClose, startTime: confirmClose.startTime, endTime, duration: elapsedSeconds(confirmClose), tableCost: tableCost(confirmClose), extras: confirmClose.extras, extrasCost: extrasTotal(confirmClose), laps: previewLaps, generalNote: confirmClose.note });
               setConfirmClose(null);
             }} style={{ background: RED, color: "#fff" }} className="flex-1 py-3 rounded-xl text-sm font-semibold">Yopish</button>
           </div>
         </Modal>
       )}
 
+      {noteTable && (
+        <Modal onClose={() => setNoteTable(null)}>
+          <h2 className="font-display text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: CREAM }}><StickyNote size={17} /> {noteTable.name} — izoh</h2>
+          <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} rows={3} placeholder="Masalan: mijoz VIP, chegirma bor..."
+            className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <button onClick={() => { onUpdateNote(noteTable.id, noteText.trim()); setNoteTable(null); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm">Saqlash</button>
+        </Modal>
+      )}
+
+      {lapTable && (
+        <Modal onClose={() => setLapTable(null)}>
+          <h2 className="font-display text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: CREAM }}><Flag size={17} /> {lapTable.name} — znak qo'yish</h2>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Hozirgi segment (oxirgi znakdan yoki boshlanishdan hozirgacha) alohida yozib qo'yiladi, stol yopilmaydi.</p>
+          <textarea value={lapComment} onChange={(e) => setLapComment(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy) — masalan kim o'ynadi"
+            className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <button onClick={() => { onAddLap(lapTable.id, lapComment.trim()); setLapTable(null); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
+            <Flag size={15} /> Znak qo'yish
+          </button>
+        </Modal>
+      )}
+
       {receipt && (
         <Modal onClose={null}>
           <ReceiptView title={`${hall.name} · ${receipt.table.name}`} start={receipt.startTime} end={receipt.endTime}
-            duration={receipt.duration} tableCost={receipt.tableCost} extras={receipt.extras} extrasCost={receipt.extrasCost} />
+            duration={receipt.duration} tableCost={receipt.tableCost} extras={receipt.extras} extrasCost={receipt.extrasCost}
+            laps={receipt.laps} generalNote={receipt.generalNote} />
           <button onClick={() => {
             onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost });
             setReceipt(null);
@@ -972,7 +1066,7 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
   );
 }
 
-function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCost }) {
+function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCost, laps, generalNote }) {
   return (
     <div className="mb-2">
       <div className="text-center mb-4">
@@ -980,9 +1074,30 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
         <div className="font-display text-lg font-semibold" style={{ color: CREAM }}>{title}</div>
         <div className="text-xs mt-1" style={{ color: "#8fa398" }}>{fmtDate(end)} · {fmtTime(start)}—{fmtTime(end)}</div>
       </div>
+      {generalNote && (
+        <div className="text-xs mb-3 px-3 py-2 rounded-lg flex items-start gap-1.5" style={{ background: "rgba(201,162,39,0.12)", color: GOLD }}>
+          <StickyNote size={12} className="mt-0.5 flex-shrink-0" /> {generalNote}
+        </div>
+      )}
       <div className="border-t border-dashed pb-3 mb-3" style={{ borderColor: FELT_LIGHT }} />
       <div className="flex justify-between text-sm mb-2" style={{ color: "#b8c9bf" }}><span>O'yin vaqti</span><span className="font-mono" style={{ color: CREAM }}>{fmtDuration(duration)}</span></div>
       <div className="flex justify-between text-sm mb-2" style={{ color: "#b8c9bf" }}><span>Stol narxi</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(tableCost)}</span></div>
+
+      {laps && laps.length > 1 && (
+        <>
+          <div className="border-t border-dashed py-2 mb-1" style={{ borderColor: FELT_LIGHT }} />
+          <div className="text-[11px] uppercase tracking-wide mb-1.5" style={{ color: "#8fa398" }}>🚩 Znaklar bo'yicha taqsimot</div>
+          {laps.map((l, i) => (
+            <div key={i} className="mb-1.5">
+              <div className="flex justify-between text-sm" style={{ color: "#b8c9bf" }}>
+                <span>{i + 1}. {fmtDuration(l.duration)}{l.comment ? ` — ${l.comment}` : ""}</span>
+                <span className="font-mono" style={{ color: CREAM }}>{fmtMoney(l.cost)}</span>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
       {extras.length > 0 && (
         <>
           <div className="border-t border-dashed py-2 mb-1" style={{ borderColor: FELT_LIGHT }} />
@@ -1001,12 +1116,20 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
 // ---------------- STATS ----------------
 function StatsScreen({ history, onBack }) {
   const [selected, setSelected] = useState(null);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const today = history.filter((h) => isSameDay(h.endTime, Date.now()));
   const week = history.filter((h) => daysAgo(h.endTime, 7));
   const month = history.filter((h) => daysAgo(h.endTime, 30));
   const summarize = (list) => ({ count: list.length, total: list.reduce((s, h) => s + h.total, 0) });
   const dS = summarize(today), wS = summarize(week), mS = summarize(month);
   const grandTotal = history.reduce((s, h) => s + h.total, 0);
+
+  const rangeActive = fromDate && toDate;
+  const rangeStart = rangeActive ? new Date(fromDate + "T00:00:00").getTime() : null;
+  const rangeEnd = rangeActive ? new Date(toDate + "T23:59:59").getTime() : null;
+  const rangeList = rangeActive ? history.filter((h) => h.endTime >= rangeStart && h.endTime <= rangeEnd) : [];
+  const rangeSummary = summarize(rangeList);
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
@@ -1015,6 +1138,34 @@ function StatsScreen({ history, onBack }) {
 
       <div className="grid grid-cols-3 gap-2 mb-6">
         <PeriodCard label="Bugun" s={dS} /><PeriodCard label="7 kun" s={wS} /><PeriodCard label="30 kun" s={mS} />
+      </div>
+
+      <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-6">
+        <div className="text-xs mb-3 flex items-center gap-1.5" style={{ color: "#8fa398" }}><CalendarRange size={13} /> Sana oralig'ini tanlang</div>
+        <div className="flex gap-2 mb-3">
+          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+        </div>
+        {rangeActive && (
+          <div className="mt-3">
+            <div className="flex justify-between items-baseline mb-3 px-1">
+              <span className="text-sm" style={{ color: CREAM }}>{rangeSummary.count} ta stol yopilgan</span>
+              <span className="font-mono text-base font-bold" style={{ color: GOLD }}>{fmtMoney(rangeSummary.total)}</span>
+            </div>
+            <div className="space-y-1.5 max-h-64 overflow-y-auto">
+              {rangeList.length === 0 && <p className="text-xs opacity-50 text-center py-3" style={{ color: CREAM }}>Shu oraliqda yopilgan stol yo'q</p>}
+              {rangeList.map((h) => (
+                <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-3 py-2.5 rounded-lg text-left" style={{ background: FELT_DARK }}>
+                  <div>
+                    <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
+                    <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)}</div>
+                  </div>
+                  <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl overflow-hidden mb-2">
@@ -1040,7 +1191,8 @@ function StatsScreen({ history, onBack }) {
       {selected && (
         <Modal onClose={() => setSelected(null)}>
           <ReceiptView title={`${selected.hallName} · ${selected.tableName}`} start={selected.startTime} end={selected.endTime}
-            duration={selected.duration} tableCost={selected.tableCost} extras={selected.extras} extrasCost={selected.extrasCost} />
+            duration={selected.duration} tableCost={selected.tableCost} extras={selected.extras} extrasCost={selected.extrasCost}
+            laps={selected.laps} generalNote={selected.generalNote} />
         </Modal>
       )}
     </div>
@@ -1192,7 +1344,12 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                   </div>
                 </div>
                 <div className="text-xs font-mono mb-1" style={{ color: "#8fa398" }}>{u.phone} · @{u.login}</div>
-                <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Ro'yxatdan o'tgan: {fmtDate(u.createdAt)}</div>
+                <div className="text-xs mb-1" style={{ color: "#8fa398" }}>Ro'yxatdan o'tgan: {fmtDate(u.createdAt)}</div>
+                {u.subscriptionUntil && u.accountType !== "vip" && (
+                  <div className="text-xs mb-3" style={{ color: u.subscriptionUntil > Date.now() ? "#7bbf6a" : "#e88" }}>
+                    Obuna: {u.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(u.subscriptionUntil)} gacha
+                  </div>
+                )}
                 {u.banned && (
                   <div className="text-xs mb-3 px-2 py-1.5 rounded-lg" style={{ background: "rgba(178,58,58,0.15)", color: "#e88" }}>
                     Bloklangan: {fmtDate(u.banUntil)} gacha · Sabab: {u.banReason || "—"}
@@ -1482,7 +1639,12 @@ function UserPanelView({ user, halls, bar, history }) {
   return (
     <div>
       <h2 className="font-display text-lg font-semibold mb-1" style={{ color: CREAM }}>{user.name} — panel</h2>
-      <p className="text-xs mb-4" style={{ color: "#8fa398" }}>@{user.login} · {user.phone}</p>
+      <p className="text-xs mb-1" style={{ color: "#8fa398" }}>@{user.login} · {user.phone}</p>
+      {user.subscriptionUntil && user.accountType !== "vip" && (
+        <p className="text-xs mb-4" style={{ color: user.subscriptionUntil > Date.now() ? "#7bbf6a" : "#e88" }}>
+          Obuna: {user.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(user.subscriptionUntil)} gacha
+        </p>
+      )}
 
       <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Zallar</div>
       <div className="grid grid-cols-2 gap-2 mb-4">
