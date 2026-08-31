@@ -3,7 +3,7 @@ import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
   Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
-  StickyNote, Flag, CalendarRange
+  StickyNote, Flag, CalendarRange, Download
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -142,6 +142,16 @@ export default function BilliardPOS() {
   const [loaded, setLoaded] = useState(false);
   const [screen, setScreen] = useState("auth");
   const [toast, setToast] = useState(null);
+  const [installPrompt, setInstallPrompt] = useState(null);
+
+  useEffect(() => {
+    function handleInstallPrompt(e) {
+      e.preventDefault();
+      setInstallPrompt(e);
+    }
+    window.addEventListener("beforeinstallprompt", handleInstallPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", handleInstallPrompt);
+  }, []);
   const [now, setNow] = useState(Date.now());
   const [activeHallId, setActiveHallId] = useState(null);
 
@@ -491,6 +501,16 @@ export default function BilliardPOS() {
           className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full text-sm font-medium shadow-lg font-display max-w-[90vw] text-center">
           {toast}
         </div>
+      )}
+
+      {installPrompt && (
+        <button
+          onClick={async () => { installPrompt.prompt(); await installPrompt.userChoice; setInstallPrompt(null); }}
+          style={{ background: GOLD, color: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }}
+          className="fixed bottom-5 right-5 z-50 px-4 py-3 rounded-full text-sm font-semibold shadow-lg font-display flex items-center gap-2"
+        >
+          <Download size={16} /> Ilovani o'rnatish
+        </button>
       )}
 
       {screen === "auth" && <AuthScreen onRegister={handleRegister} onLogin={handleLogin} />}
