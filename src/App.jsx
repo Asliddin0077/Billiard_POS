@@ -489,7 +489,7 @@ export default function BilliardPOS() {
   }
 
   return (
-    <div style={{ background: FELT_DARK, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="text-white">
+    <div style={{ background: FELT_DARK, minHeight: "100vh", fontFamily: "Inter, sans-serif", paddingTop: "var(--safe-top)", paddingBottom: "var(--safe-bottom)" }} className="text-white">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
         .font-display{font-family:'Space Grotesk',sans-serif;}
@@ -497,8 +497,8 @@ export default function BilliardPOS() {
       `}</style>
 
       {toast && (
-        <div style={{ background: GOLD, color: FELT_DARK }}
-          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full text-sm font-medium shadow-lg font-display max-w-[90vw] text-center">
+        <div style={{ background: GOLD, color: FELT_DARK, top: "calc(var(--safe-top) + 16px)" }}
+          className="fixed left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full text-sm font-medium shadow-lg font-display max-w-[90vw] text-center">
           {toast}
         </div>
       )}
@@ -506,8 +506,8 @@ export default function BilliardPOS() {
       {installPrompt && (
         <button
           onClick={async () => { installPrompt.prompt(); await installPrompt.userChoice; setInstallPrompt(null); }}
-          style={{ background: GOLD, color: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }}
-          className="fixed bottom-5 right-5 z-50 px-4 py-3 rounded-full text-sm font-semibold shadow-lg font-display flex items-center gap-2"
+          style={{ background: GOLD, color: FELT_DARK, border: `1px solid ${FELT_LIGHT}`, bottom: "calc(var(--safe-bottom) + 20px)" }}
+          className="fixed right-5 z-50 px-4 py-3 rounded-full text-sm font-semibold shadow-lg font-display flex items-center gap-2"
         >
           <Download size={16} /> Ilovani o'rnatish
         </button>
