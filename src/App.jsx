@@ -3,7 +3,7 @@ import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
   Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
-  StickyNote, Flag, CalendarRange, Download
+  StickyNote, Flag, CalendarRange, Download, Bell
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -84,6 +84,8 @@ function mapTable(row) {
     id: row.id, name: row.name, rate: Number(row.rate), status: row.status,
     startTime: row.start_time ? new Date(row.start_time).getTime() : null,
     note: row.note || "",
+    targetSeconds: row.target_seconds != null ? Number(row.target_seconds) : null,
+    prepaidAmount: row.prepaid_amount != null ? Number(row.prepaid_amount) : null,
     extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price) })),
     laps: (row.table_laps || []).map(mapLap).sort((a, b) => a.end - b.end),
   };
@@ -320,10 +322,13 @@ export default function BilliardPOS() {
   async function createTable(hallId, name, rate) { await supabase.from("billiard_tables").insert({ hall_id: hallId, name, rate, status: "free" }); await refreshOwnerData(); }
   async function editTable(hallId, tableId, name, rate) { await supabase.from("billiard_tables").update({ name, rate }).eq("id", tableId); await refreshOwnerData(); }
   async function deleteTable(hallId, tableId) { await supabase.from("billiard_tables").delete().eq("id", tableId); await refreshOwnerData(); }
-  async function startTable(hallId, tableId) {
+  async function startTable(hallId, tableId, targetSeconds, prepaidAmount) {
     await supabase.from("table_extras").delete().eq("table_id", tableId);
     await supabase.from("table_laps").delete().eq("table_id", tableId);
-    await supabase.from("billiard_tables").update({ status: "playing", start_time: new Date().toISOString(), note: null }).eq("id", tableId);
+    await supabase.from("billiard_tables").update({
+      status: "playing", start_time: new Date().toISOString(), note: null,
+      target_seconds: targetSeconds || null, prepaid_amount: prepaidAmount || null,
+    }).eq("id", tableId);
     await refreshOwnerData();
   }
   async function addExtra(hallId, tableId, extra) {
@@ -536,7 +541,7 @@ export default function BilliardPOS() {
           onCreateTable={(name, rate) => createTable(activeHallId, name, rate)}
           onEditTable={(tid, name, rate) => editTable(activeHallId, tid, name, rate)}
           onDeleteTable={(tid) => deleteTable(activeHallId, tid)}
-          onStart={(tid) => startTable(activeHallId, tid)}
+          onStart={(tid, targetSeconds, prepaidAmount) => startTable(activeHallId, tid, targetSeconds, prepaidAmount)}
           onAddExtra={(tid, extra) => addExtra(activeHallId, tid, extra)}
           onClose={(tid, record) => closeTable(activeHallId, tid, record)}
           onUpdateNote={(tid, note) => updateTableNote(activeHallId, tid, note)}
@@ -891,6 +896,9 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
   const [activeTable, setActiveTable] = useState(null);
   const [search, setSearch] = useState("");
   const [confirmStart, setConfirmStart] = useState(null);
+  const [startMode, setStartMode] = useState("vip");
+  const [startAmount, setStartAmount] = useState("");
+  const [alertedTables, setAlertedTables] = useState({});
   const [confirmClose, setConfirmClose] = useState(null);
   const [receipt, setReceipt] = useState(null);
   const [noteTable, setNoteTable] = useState(null);
@@ -898,6 +906,38 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
   const [lapTable, setLapTable] = useState(null);
   const [lapComment, setLapComment] = useState("");
   const [justAdded, setJustAdded] = useState(null);
+
+  function playAlertSound() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const beep = (delay) => {
+        setTimeout(() => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.type = "sine"; osc.frequency.value = 880;
+          gain.gain.setValueAtTime(0.3, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+          osc.start(); osc.stop(ctx.currentTime + 0.4);
+        }, delay);
+      };
+      beep(0); beep(500); beep(1000);
+    } catch (e) {}
+  }
+
+  useEffect(() => {
+    if (!hall) return;
+    hall.tables.forEach((t) => {
+      if (t.status === "playing" && t.targetSeconds && t.startTime) {
+        const key = `${t.id}-${t.startTime}`;
+        const elapsed = (now - t.startTime) / 1000;
+        if (elapsed >= t.targetSeconds && !alertedTables[key]) {
+          playAlertSound();
+          setAlertedTables((prev) => ({ ...prev, [key]: true }));
+        }
+      }
+    });
+  }, [now, hall]);
 
   if (!hall) return null;
   function elapsedSeconds(t) { return t.status !== "playing" || !t.startTime ? 0 : (now - t.startTime) / 1000; }
@@ -934,6 +974,18 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
               {playing ? (
                 <>
                   <div className="font-mono text-lg font-semibold mb-0.5" style={{ color: GOLD }}>{fmtDuration(elapsedSeconds(t))}</div>
+                  {t.targetSeconds && (
+                    (() => {
+                      const remaining = t.targetSeconds - elapsedSeconds(t);
+                      const timeUp = remaining <= 0;
+                      return (
+                        <div className={`text-xs mb-1.5 px-2 py-1 rounded-lg flex items-center gap-1 ${timeUp ? "animate-pulse" : ""}`}
+                          style={{ background: timeUp ? "rgba(178,58,58,0.2)" : "rgba(201,162,39,0.12)", color: timeUp ? "#ff8a8a" : GOLD }}>
+                          <Bell size={11} /> {timeUp ? "Vaqt tugadi!" : `Qoldi: ${fmtDuration(remaining)}`}
+                        </div>
+                      );
+                    })()
+                  )}
                   <div className="font-mono text-xs mb-2" style={{ color: CREAM }}>{fmtMoney(tableCost(t) + extrasTotal(t))}</div>
                   {t.note && (
                     <div className="text-[11px] mb-2 px-2 py-1 rounded-lg flex items-center gap-1" style={{ background: "rgba(201,162,39,0.12)", color: GOLD }}>
@@ -988,12 +1040,48 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
       )}
 
       {confirmStart && (
-        <Modal onClose={() => setConfirmStart(null)}>
+        <Modal onClose={() => { setConfirmStart(null); setStartMode("vip"); setStartAmount(""); }}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{confirmStart.name}" da o'ynashni boshlaysizmi?</h2>
-          <p className="text-sm mb-5" style={{ color: "#b8c9bf" }}>Narx: {fmtMoney(confirmStart.rate)}/soat</p>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Narx: {fmtMoney(confirmStart.rate)}/soat</p>
+
+          <div className="flex gap-2 mb-4">
+            <button onClick={() => setStartMode("vip")} className="flex-1 py-2.5 rounded-xl text-sm font-medium"
+              style={{ background: startMode === "vip" ? GOLD : FELT_DARK, color: startMode === "vip" ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+              Cheksiz (VIP)
+            </button>
+            <button onClick={() => setStartMode("amount")} className="flex-1 py-2.5 rounded-xl text-sm font-medium"
+              style={{ background: startMode === "amount" ? GOLD : FELT_DARK, color: startMode === "amount" ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+              Summa bo'yicha
+            </button>
+          </div>
+
+          {startMode === "amount" && (
+            <div className="mb-4">
+              <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>To'langan summa (so'm)</div>
+              <input value={startAmount} onChange={(e) => setStartAmount(e.target.value.replace(/[^0-9]/g, ""))} placeholder="masalan 35000"
+                className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+              {startAmount && (
+                <div className="text-xs mt-2" style={{ color: GOLD }}>
+                  ≈ {fmtDuration((Number(startAmount) / confirmStart.rate) * 3600)} vaqt beriladi, tugaganda ovozli ogohlantirish keladi
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2">
-            <button onClick={() => setConfirmStart(null)} className="flex-1 py-3 rounded-xl text-sm" style={{ background: FELT_DARK, color: CREAM }}>Bekor</button>
-            <button onClick={() => { onStart(confirmStart.id); setConfirmStart(null); }} style={{ background: GOLD, color: FELT_DARK }} className="flex-1 py-3 rounded-xl text-sm font-semibold">Boshlash</button>
+            <button onClick={() => { setConfirmStart(null); setStartMode("vip"); setStartAmount(""); }} className="flex-1 py-3 rounded-xl text-sm" style={{ background: FELT_DARK, color: CREAM }}>Bekor</button>
+            <button
+              disabled={startMode === "amount" && !startAmount}
+              onClick={() => {
+                if (startMode === "amount" && startAmount) {
+                  const targetSeconds = (Number(startAmount) / confirmStart.rate) * 3600;
+                  onStart(confirmStart.id, targetSeconds, Number(startAmount));
+                } else {
+                  onStart(confirmStart.id, null, null);
+                }
+                setConfirmStart(null); setStartMode("vip"); setStartAmount("");
+              }}
+              style={{ background: GOLD, color: FELT_DARK }} className="flex-1 py-3 rounded-xl text-sm font-semibold disabled:opacity-40">Boshlash</button>
           </div>
         </Modal>
       )}
