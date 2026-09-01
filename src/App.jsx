@@ -910,18 +910,25 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
   function playAlertSound() {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const beep = (delay) => {
+      const tone = (delay, freq, duration) => {
         setTimeout(() => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.connect(gain); gain.connect(ctx.destination);
-          osc.type = "sine"; osc.frequency.value = 880;
-          gain.gain.setValueAtTime(0.3, ctx.currentTime);
-          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-          osc.start(); osc.stop(ctx.currentTime + 0.4);
+          osc.type = "square"; osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.5, ctx.currentTime);
+          gain.gain.setValueAtTime(0.5, ctx.currentTime + duration - 0.03);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+          osc.start(); osc.stop(ctx.currentTime + duration);
         }, delay);
       };
-      beep(0); beep(500); beep(1000);
+      // sirenaga o'xshash: baland-past-baland-past, 4 marta takrorlanadi
+      const pattern = [1046, 784];
+      let t = 0;
+      for (let i = 0; i < 8; i++) {
+        tone(t, pattern[i % 2], 0.28);
+        t += 300;
+      }
     } catch (e) {}
   }
 
