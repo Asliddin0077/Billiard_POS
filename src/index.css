@@ -5,3 +5,14 @@
 html, body, #root {
   height: 100%;
 }
+
+/* iPhone'da input/textarea'ga bosganda ekran avtomatik yaqinlashib qolmasligi uchun
+   (iOS Safari 16px'dan kichik shriftlarda avtomatik zoom qiladi) */
+input, textarea, select {
+  font-size: 16px !important;
+}
+
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
