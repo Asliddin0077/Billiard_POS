@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
@@ -64,6 +64,11 @@ function isBanned(u) {
   return u && u.banned && u.banUntil && u.banUntil > Date.now();
 }
 function unwrapRpc(data) { return Array.isArray(data) ? data[0] : data; }
+function computeNewUntil(currentUntilMs, days) {
+  const now = Date.now();
+  const base = currentUntilMs && currentUntilMs > now ? currentUntilMs : now;
+  return base + days * 86400000;
+}
 
 // ---------------- DB row -> JS object mapping ----------------
 function mapUser(row) {
@@ -103,7 +108,7 @@ function mapHistory(row) {
     generalNote: row.general_note || "",
   };
 }
-function mapPromo(row) { return { code: row.code, expiry: row.expiry ? new Date(row.expiry).getTime() : null, used: row.used, usedBy: row.used_by }; }
+function mapPromo(row) { return { code: row.code, durationDays: row.duration_days || 30, used: row.used, usedBy: row.used_by }; }
 function mapChat(row) { return { id: row.id, ownerId: row.owner_id, from: row.from_role, text: row.message, broadcast: row.broadcast, readByAdmin: row.read_by_admin, readByUser: row.read_by_user, ts: new Date(row.created_at).getTime() }; }
 function mapAdmin(row) { return { login: row.login, name: row.name, createdAt: new Date(row.created_at).getTime() }; }
 function mapPlan(row) { return { id: row.id, label: row.label, months: Number(row.months), days: row.days, price: Number(row.price), active: row.active }; }
@@ -145,6 +150,35 @@ export default function BilliardPOS() {
   const [screen, setScreen] = useState("auth");
   const [toast, setToast] = useState(null);
   const [installPrompt, setInstallPrompt] = useState(null);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const touchStartY = useRef(0);
+  const pulling = useRef(false);
+
+  async function doRefresh() {
+    setRefreshing(true);
+    try {
+      if (isAdmin) await loadAdmin();
+      else if (currentUser) await refreshOwnerData();
+    } catch (e) {}
+    setRefreshing(false);
+    setPullDistance(0);
+  }
+
+  function handleTouchStart(e) {
+    if (window.scrollY <= 0) { touchStartY.current = e.touches[0].clientY; pulling.current = true; }
+  }
+  function handleTouchMove(e) {
+    if (!pulling.current) return;
+    const diff = e.touches[0].clientY - touchStartY.current;
+    if (diff > 0 && window.scrollY <= 0) setPullDistance(Math.min(diff * 0.5, 90));
+    else { pulling.current = false; setPullDistance(0); }
+  }
+  function handleTouchEnd() {
+    if (pulling.current && pullDistance > 55 && !refreshing) doRefresh();
+    else setPullDistance(0);
+    pulling.current = false;
+  }
 
   useEffect(() => {
     function handleInstallPrompt(e) {
@@ -305,13 +339,15 @@ export default function BilliardPOS() {
 
   async function activatePromo(code) {
     const { data } = await supabase.from("promo_codes").select("*").ilike("code", code.trim()).maybeSingle();
-    if (!data || data.used || (data.expiry && new Date(data.expiry).getTime() < Date.now())) {
-      showToast("Promokod noto'g'ri, muddati o'tgan yoki ishlatilgan"); return;
+    if (!data || data.used) {
+      showToast("Promokod noto'g'ri yoki ishlatilgan"); return;
     }
+    const days = data.duration_days || 30;
+    const newUntil = computeNewUntil(currentUser.subscriptionUntil, days);
     await supabase.from("promo_codes").update({ used: true, used_by: currentUser.id }).eq("code", data.code);
-    await supabase.from("users").update({ subscribed: true }).eq("id", currentUser.id);
-    setCurrentUser((u) => ({ ...u, subscribed: true }));
-    setScreen("halls"); showToast("Obuna faollashtirildi!");
+    await supabase.from("users").update({ subscribed: true, subscription_until: new Date(newUntil).toISOString() }).eq("id", currentUser.id);
+    setCurrentUser((u) => ({ ...u, subscribed: true, subscriptionUntil: newUntil }));
+    setScreen("halls"); showToast(`Obuna faollashtirildi! ${fmtDate(newUntil)} gacha`);
   }
   // To'lov endi Telegram bot orqali (@Billiard_pos_bot) - admin qo'lda faollashtiradi
 
@@ -424,13 +460,16 @@ export default function BilliardPOS() {
     await supabase.from("subscription_plans").update({ active: false }).eq("id", id);
     await fetchPlans();
   }
-  async function addPromo(code, expiry) {
-    await supabase.from("promo_codes").insert({ code, expiry: expiry ? new Date(expiry).toISOString() : null });
+  async function addPromo(code, durationDays) {
+    await supabase.from("promo_codes").insert({ code, duration_days: Number(durationDays) });
     await loadAdmin();
   }
   async function toggleUserSub(userId) {
     const u = users.find((x) => x.id === userId);
-    await supabase.from("users").update({ subscribed: !u.subscribed }).eq("id", userId);
+    const turningOff = u.subscribed;
+    await supabase.from("users").update(
+      turningOff ? { subscribed: false, subscription_until: null } : { subscribed: true }
+    ).eq("id", userId);
     await loadAdmin();
   }
   async function toggleVip(userId) {
@@ -494,12 +533,21 @@ export default function BilliardPOS() {
   }
 
   return (
-    <div style={{ background: FELT_DARK, minHeight: "100vh", fontFamily: "Inter, sans-serif", paddingTop: "var(--safe-top)", paddingBottom: "var(--safe-bottom)" }} className="text-white">
+    <div
+      onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
+      style={{ background: FELT_DARK, minHeight: "100vh", fontFamily: "Inter, sans-serif", paddingTop: "var(--safe-top)", paddingBottom: "var(--safe-bottom)" }} className="text-white">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
         .font-display{font-family:'Space Grotesk',sans-serif;}
         .font-mono{font-family:'JetBrains Mono',monospace;}
       `}</style>
+
+      {(pullDistance > 0 || refreshing) && (
+        <div className="fixed left-1/2 -translate-x-1/2 z-50 flex items-center justify-center"
+          style={{ top: `calc(var(--safe-top) + ${refreshing ? 14 : pullDistance}px)`, transition: refreshing ? "top 0.2s" : "none" }}>
+          <Loader2 size={22} className={refreshing || pullDistance > 55 ? "animate-spin" : ""} style={{ color: GOLD, opacity: refreshing ? 1 : Math.min(pullDistance / 55, 1) }} />
+        </div>
+      )}
 
       {toast && (
         <div style={{ background: GOLD, color: FELT_DARK, top: "calc(var(--safe-top) + 16px)" }}
@@ -1365,8 +1413,7 @@ function SupportScreen({ messages, onSend, onBack }) {
 function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan, onDeletePlan, onAddPromo, onToggleSub, onToggleVip, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
   const [tab, setTab] = useState("stats");
   const [code, setCode] = useState("");
-  const [expiryMode, setExpiryMode] = useState("30");
-  const [customDate, setCustomDate] = useState("");
+  const [promoDays, setPromoDays] = useState("");
   const [banTarget, setBanTarget] = useState(null);
   const [banDays, setBanDays] = useState("3");
   const [banHours, setBanHours] = useState("0");
@@ -1460,7 +1507,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                 </div>
                 <div className="text-xs font-mono mb-1" style={{ color: "#8fa398" }}>{u.phone} · @{u.login}</div>
                 <div className="text-xs mb-1" style={{ color: "#8fa398" }}>Ro'yxatdan o'tgan: {fmtDate(u.createdAt)}</div>
-                {u.subscriptionUntil && u.accountType !== "vip" && (
+                {u.subscribed && u.subscriptionUntil && u.accountType !== "vip" && (
                   <div className="text-xs mb-3" style={{ color: u.subscriptionUntil > Date.now() ? "#7bbf6a" : "#e88" }}>
                     Obuna: {u.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(u.subscriptionUntil)} gacha
                   </div>
@@ -1543,37 +1590,23 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
             <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi promokod yaratish</div>
             <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Masalan ASLIDDIN10"
               className="w-full mb-3 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-            <div className="flex gap-2 mb-3">
-              {["30", "custom", "unlimited"].map((m) => (
-                <button key={m} onClick={() => setExpiryMode(m)} className="flex-1 py-2 rounded-lg text-xs font-medium"
-                  style={{ background: expiryMode === m ? GOLD : FELT_DARK, color: expiryMode === m ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
-                  {m === "30" ? "30 kun" : m === "custom" ? "Sana tanlash" : "Cheksiz"}
-                </button>
-              ))}
-            </div>
-            {expiryMode === "custom" && (
-              <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)}
-                className="w-full mb-3 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-            )}
-            <button onClick={() => {
-              if (!code.trim()) return;
-              let expiry = null;
-              if (expiryMode === "30") expiry = Date.now() + 30 * 86400000;
-              if (expiryMode === "custom") { if (!customDate) return; expiry = new Date(customDate).getTime(); }
-              onAddPromo(code.trim(), expiry); setCode(""); setCustomDate("");
-            }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold">Qo'shish</button>
+            <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Necha kunlik obuna beradi (faollashtirilgan kundan boshlab)</div>
+            <input value={promoDays} onChange={(e) => setPromoDays(e.target.value.replace(/[^0-9]/g, ""))} placeholder="masalan 3"
+              className="w-full mb-3 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+            <button disabled={!code.trim() || !promoDays} onClick={() => {
+              onAddPromo(code.trim(), promoDays); setCode(""); setPromoDays("");
+            }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">Qo'shish</button>
           </div>
           <div className="space-y-2">
             {promoCodes.length === 0 && <p className="text-sm opacity-50" style={{ color: CREAM }}>Hali promokod yo'q</p>}
             {promoCodes.map((p) => {
-              const expired = p.expiry !== null && p.expiry < Date.now();
-              const status = p.used ? "ishlatilgan" : expired ? "muddati tugagan" : "faol";
-              const color = p.used ? "#999" : expired ? "#e88" : GOLD;
+              const status = p.used ? "ishlatilgan" : "faol";
+              const color = p.used ? "#999" : GOLD;
               return (
                 <div key={p.code} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="flex items-center justify-between px-4 py-3 rounded-xl">
                   <div>
                     <div className="font-mono text-sm" style={{ color: CREAM }}>{p.code}</div>
-                    <div className="text-[11px]" style={{ color: "#8fa398" }}>{p.expiry === null ? "Cheksiz" : `Tugash: ${fmtDate(p.expiry)}`}</div>
+                    <div className="text-[11px]" style={{ color: "#8fa398" }}>{p.durationDays} kunlik obuna beradi</div>
                   </div>
                   <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ background: "rgba(255,255,255,0.06)", color }}>{status}</span>
                 </div>
@@ -1755,7 +1788,7 @@ function UserPanelView({ user, halls, bar, history }) {
     <div>
       <h2 className="font-display text-lg font-semibold mb-1" style={{ color: CREAM }}>{user.name} — panel</h2>
       <p className="text-xs mb-1" style={{ color: "#8fa398" }}>@{user.login} · {user.phone}</p>
-      {user.subscriptionUntil && user.accountType !== "vip" && (
+      {user.subscribed && user.subscriptionUntil && user.accountType !== "vip" && (
         <p className="text-xs mb-4" style={{ color: user.subscriptionUntil > Date.now() ? "#7bbf6a" : "#e88" }}>
           Obuna: {user.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(user.subscriptionUntil)} gacha
         </p>
