@@ -3,7 +3,7 @@ import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
   Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
-  StickyNote, Flag, CalendarRange, Download, Bell
+  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -192,6 +192,7 @@ export default function BilliardPOS() {
   const [activeHallId, setActiveHallId] = useState(null);
 
   const [currentUser, setCurrentUser] = useState(null);
+  const [sessionToken, setSessionToken] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminLogin, setAdminLogin] = useState(null);
 
@@ -231,13 +232,18 @@ export default function BilliardPOS() {
           } else if (s.userId) {
             const { data } = await supabase.from("users").select("*").eq("id", s.userId).single();
             if (data) {
-              const u = mapUser(data);
-              setCurrentUser(u);
-              if (isBanned(u)) { setScreen("banned"); }
-              else {
-                const od = await fetchOwnerData(u.id);
-                setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats);
-                setScreen(canAccess(u) ? "halls" : "subscribe");
+              if (s.token && data.active_session_token && data.active_session_token !== s.token) {
+                localStorage.removeItem(SESSION_KEY);
+                showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
+              } else {
+                const u = mapUser(data);
+                setCurrentUser(u); setSessionToken(s.token || null);
+                if (isBanned(u)) { setScreen("banned"); }
+                else {
+                  const od = await fetchOwnerData(u.id);
+                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats);
+                  setScreen(canAccess(u) ? "halls" : "subscribe");
+                }
               }
             }
           }
@@ -248,6 +254,21 @@ export default function BilliardPOS() {
   }, []);
 
   const anyPlaying = halls.some((h) => h.tables.some((t) => t.status === "playing"));
+
+  useEffect(() => {
+    if (!currentUser || !sessionToken) return;
+    const interval = setInterval(async () => {
+      const { data } = await supabase.from("users").select("active_session_token").eq("id", currentUser.id).single();
+      if (data && data.active_session_token && data.active_session_token !== sessionToken) {
+        localStorage.removeItem(SESSION_KEY);
+        setCurrentUser(null); setSessionToken(null);
+        setHalls([]); setBar([]); setHistory([]); setMyChat([]);
+        setScreen("auth");
+        showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
+      }
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [currentUser, sessionToken]);
   useEffect(() => {
     if (!anyPlaying) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -283,8 +304,11 @@ export default function BilliardPOS() {
     const { data, error } = await supabase.rpc("register_user", { p_name: name.trim(), p_phone: normPhone, p_login: login.trim(), p_password: password });
     if (error) { showToast(error.message.includes("LOGIN_TAKEN") ? "Bu login band" : "Xatolik yuz berdi"); return; }
     const u = mapUser(unwrapRpc(data));
-    setCurrentUser(u); setHalls([]); setBar([]); setHistory([]); setMyChat([]);
-    persistSession({ userId: u.id, isAdmin: false });
+    const token = crypto.randomUUID();
+    await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
+    try { localStorage.setItem(`billiard-pos-newuser-${u.id}`, "1"); } catch (e) {}
+    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]);
+    persistSession({ userId: u.id, isAdmin: false, token });
     setScreen("subscribe");
   }
 
@@ -322,7 +346,10 @@ export default function BilliardPOS() {
       u = { ...u, banned: false, banUntil: null, banReason: "" };
     }
     setCurrentUser(u);
-    persistSession({ userId: u.id, isAdmin: false });
+    const token = crypto.randomUUID();
+    setSessionToken(token);
+    await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
+    persistSession({ userId: u.id, isAdmin: false, token });
     if (isBanned(u)) { setScreen("banned"); return; }
     const od = await fetchOwnerData(u.id);
     setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats);
@@ -331,7 +358,7 @@ export default function BilliardPOS() {
 
   function handleLogout() {
     persistSession({ userId: null, isAdmin: false });
-    setCurrentUser(null); setIsAdmin(false); setAdminLogin(null);
+    setCurrentUser(null); setSessionToken(null); setIsAdmin(false); setAdminLogin(null);
     setHalls([]); setBar([]); setHistory([]); setMyChat([]);
     setUsers([]); setPromoCodes([]); setAdminAccounts([]); setChatsByUser({});
     setActiveHallId(null); setScreen("auth");
@@ -815,12 +842,33 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
   const [menuPrice, setMenuPrice] = useState("");
   const [showPass, setShowPass] = useState(false);
   const [oldPass, setOldPass] = useState(""); const [newPass, setNewPass] = useState("");
+  const [showGuide, setShowGuide] = useState(false);
+  const [isNewUser, setIsNewUser] = useState(() => {
+    try { return localStorage.getItem(`billiard-pos-newuser-${user.id}`) === "1"; } catch (e) { return false; }
+  });
+
+  function openGuide() {
+    setShowGuide(true);
+    if (isNewUser) {
+      setIsNewUser(false);
+      try { localStorage.removeItem(`billiard-pos-newuser-${user.id}`); } catch (e) {}
+    }
+  }
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <Logo />
         <div className="flex items-center gap-4">
+          <button onClick={openGuide} title="Qo'llanma" className="relative">
+            <BookOpen size={18} style={{ color: isNewUser ? GOLD : "#b8c9bf" }} />
+            {isNewUser && (
+              <span className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full animate-ping" style={{ background: GOLD }} />
+            )}
+            {isNewUser && (
+              <span className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full" style={{ background: GOLD }} />
+            )}
+          </button>
           <button onClick={() => setShowPass(true)} title="Sozlamalar"><Settings size={18} style={{ color: "#b8c9bf" }} /></button>
           <button onClick={onSupport} title="Yordam" className="relative">
             <MessageCircle size={18} style={{ color: "#b8c9bf" }} />
@@ -835,6 +883,41 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         </div>
       </div>
       <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
+
+      {isNewUser && (
+        <button onClick={openGuide} style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}` }}
+          className="w-full mb-4 px-4 py-3 rounded-xl text-left flex items-center gap-3">
+          <BookOpen size={20} style={{ color: GOLD }} />
+          <div>
+            <div className="text-sm font-semibold" style={{ color: GOLD }}>Ilovadan birinchi marta foydalanyapsizmi?</div>
+            <div className="text-xs" style={{ color: "#e8d9a8" }}>Qo'llanmani ochish uchun shu yerga bosing</div>
+          </div>
+        </button>
+      )}
+
+      {showGuide && (
+        <Modal onClose={() => setShowGuide(false)}>
+          <h2 className="font-display text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: CREAM }}><BookOpen size={18} /> Qo'llanmalar</h2>
+          <a href="/docs/qollanma.pdf" target="_blank" rel="noopener noreferrer"
+            style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }}
+            className="w-full mb-3 px-4 py-3 rounded-xl flex items-center gap-3">
+            <FileText size={18} style={{ color: GOLD }} />
+            <div>
+              <div className="text-sm font-medium" style={{ color: CREAM }}>Foydalanish qo'llanmasi</div>
+              <div className="text-xs" style={{ color: "#8fa398" }}>Ilovadan qanday foydalanish, qadam-baqadam</div>
+            </div>
+          </a>
+          <a href="/docs/ornatish.pdf" target="_blank" rel="noopener noreferrer"
+            style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }}
+            className="w-full px-4 py-3 rounded-xl flex items-center gap-3">
+            <Download size={18} style={{ color: GOLD }} />
+            <div>
+              <div className="text-sm font-medium" style={{ color: CREAM }}>Ilovani o'rnatish qo'llanmasi</div>
+              <div className="text-xs" style={{ color: "#8fa398" }}>Android, iPhone va kompyuterga o'rnatish</div>
+            </div>
+          </a>
+        </Modal>
+      )}
 
       {showPass && (
         <Modal onClose={() => { setShowPass(false); setOldPass(""); setNewPass(""); }}>
