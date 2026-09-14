@@ -91,6 +91,8 @@ function mapTable(row) {
     note: row.note || "",
     targetSeconds: row.target_seconds != null ? Number(row.target_seconds) : null,
     prepaidAmount: row.prepaid_amount != null ? Number(row.prepaid_amount) : null,
+    pausedAt: row.paused_at ? new Date(row.paused_at).getTime() : null,
+    pausedSeconds: row.paused_seconds != null ? Number(row.paused_seconds) : 0,
     extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price) })),
     laps: (row.table_laps || []).map(mapLap).sort((a, b) => a.end - b.end),
   };
@@ -391,6 +393,24 @@ export default function BilliardPOS() {
     await supabase.from("billiard_tables").update({
       status: "playing", start_time: new Date().toISOString(), note: null,
       target_seconds: targetSeconds || null, prepaid_amount: prepaidAmount || null,
+      paused_at: null, paused_seconds: 0,
+    }).eq("id", tableId);
+    await refreshOwnerData();
+  }
+  async function pauseTable(hallId, tableId) {
+    await supabase.from("billiard_tables").update({
+      status: "paused", paused_at: new Date().toISOString(),
+    }).eq("id", tableId);
+    await refreshOwnerData();
+  }
+  async function resumeTable(hallId, tableId) {
+    const hall = halls.find((h) => h.id === hallId);
+    const table = hall && hall.tables.find((t) => t.id === tableId);
+    if (!table || !table.pausedAt) return;
+    const addedPause = (Date.now() - table.pausedAt) / 1000;
+    await supabase.from("billiard_tables").update({
+      status: "playing", paused_at: null,
+      paused_seconds: (table.pausedSeconds || 0) + addedPause,
     }).eq("id", tableId);
     await refreshOwnerData();
   }
@@ -604,6 +624,9 @@ export default function BilliardPOS() {
           onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem}
           onOpenHall={(id) => { setActiveHallId(id); setScreen("hall"); }}
           onLogout={handleLogout} onStats={() => setScreen("stats")}
+          onStart={(tid, targetSeconds, prepaidAmount) => startTable(activeHallId, tid, targetSeconds, prepaidAmount)}
+          onPause={(tid) => pauseTable(activeHallId, tid)}
+          onResume={(tid) => resumeTable(activeHallId, tid)}
           onSupport={() => { markReadByUser(); setScreen("support"); }}
           unreadCount={userUnreadCount} onChangePassword={changeOwnPassword}
         />
@@ -1020,8 +1043,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
 }
 
 // ---------------- HALL ----------------
-function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {
-  const [showCreate, setShowCreate] = useState(false);
+function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {  const [showCreate, setShowCreate] = useState(false);
   const [editTableObj, setEditTableObj] = useState(null);
   const [tName, setTName] = useState(""); const [tRate, setTRate] = useState("");
   const [activeTable, setActiveTable] = useState(null);
@@ -1078,8 +1100,12 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
   }, [now, hall]);
 
   if (!hall) return null;
-  function elapsedSeconds(t) { return t.status !== "playing" || !t.startTime ? 0 : (now - t.startTime) / 1000; }
-  function tableCost(t) { return (elapsedSeconds(t) / 3600) * t.rate; }
+  function elapsedSeconds(t) {
+    if (t.status === "paused" && t.startTime) {
+      return Math.max(0, (t.pausedAt - t.startTime) / 1000 - (t.pausedSeconds || 0));
+    }
+    return t.status !== "playing" || !t.startTime ? 0 : Math.max(0, (now - t.startTime) / 1000 - (t.pausedSeconds || 0));
+  }  function tableCost(t) { return (elapsedSeconds(t) / 3600) * t.rate; }
   function extrasTotal(t) { return t.extras.reduce((s, e) => s + e.price, 0); }
   const filteredBar = bar.filter((b) => b.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -1091,8 +1117,9 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
       <div className="grid grid-cols-2 gap-3 mb-4">
         {hall.tables.map((t) => {
           const playing = t.status === "playing";
+          const paused = t.status === "paused";
           return (
-            <div key={t.id} style={{ background: playing ? "linear-gradient(160deg,#0e4a36,#0b3d2e)" : FELT, border: `2px solid ${playing ? GOLD : FELT_LIGHT}`, borderRadius: 20 }} className="p-4 relative overflow-hidden">
+            <div key={t.id} style={{ background: playing ? "linear-gradient(160deg,#0e4a36,#0b3d2e)" : paused ? "linear-gradient(160deg,#4a3a0e,#3d2e0b)" : FELT, border: `2px solid ${playing ? GOLD : paused ? "#d19a4f" : FELT_LIGHT}`, borderRadius: 20 }} className="p-4 relative overflow-hidden">
               <div className="absolute -top-1 -left-1 w-3 h-3 rounded-full" style={{ background: FELT_DARK }} />
               <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full" style={{ background: FELT_DARK }} />
               <div className="absolute -bottom-1 -left-1 w-3 h-3 rounded-full" style={{ background: FELT_DARK }} />
@@ -1100,7 +1127,7 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
 
               <div className="flex justify-between items-start mb-1">
                 <div className="font-display font-semibold text-sm" style={{ color: CREAM }}>🎯 {t.name}</div>
-                {!playing && (
+                {!playing && !paused && (
                   <div className="flex gap-1">
                     <button onClick={() => { setEditTableObj(t); setTName(t.name); setTRate(String(t.rate)); }}><Pencil size={12} style={{ color: "#b8c9bf" }} /></button>
                     <button onClick={() => { if (confirm(`"${t.name}" stolini o'chirasizmi?`)) onDeleteTable(t.id); }}><Trash2 size={12} style={{ color: RED }} /></button>
@@ -1109,10 +1136,12 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
               </div>
               <div className="text-xs mb-3" style={{ color: "#b8c9bf" }}>{fmtMoney(t.rate)}/soat</div>
 
-              {playing ? (
+              {playing || paused ? (
                 <>
-                  <div className="font-mono text-lg font-semibold mb-0.5" style={{ color: GOLD }}>{fmtDuration(elapsedSeconds(t))}</div>
-                  {t.targetSeconds && (
+                  <div className="font-mono text-lg font-semibold mb-0.5" style={{ color: paused ? "#d19a4f" : GOLD }}>
+                    {fmtDuration(elapsedSeconds(t))} {paused && <span className="text-xs font-sans opacity-70">(pauzada)</span>}
+                  </div>
+                  {playing && t.targetSeconds && (
                     (() => {
                       const remaining = t.targetSeconds - elapsedSeconds(t);
                       const timeUp = remaining <= 0;
@@ -1133,16 +1162,25 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
                   {t.laps.length > 0 && (
                     <div className="text-[11px] mb-2" style={{ color: "#b8c9bf" }}>🚩 {t.laps.length} ta znak qo'yilgan</div>
                   )}
-                  <div className="flex gap-1.5 mb-2">
-                    <button onClick={() => { setNoteTable(t); setNoteText(t.note || ""); }} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}>
-                      <StickyNote size={11} /> Izoh
-                    </button>
-                    <button onClick={() => { setLapTable(t); setLapComment(""); }} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: GOLD }}>
-                      <Flag size={11} /> Znak qo'yish
-                    </button>
-                  </div>
+                  {playing && (
+                    <div className="flex gap-1.5 mb-2">
+                      <button onClick={() => { setNoteTable(t); setNoteText(t.note || ""); }} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}>
+                        <StickyNote size={11} /> Izoh
+                      </button>
+                      <button onClick={() => { setLapTable(t); setLapComment(""); }} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: GOLD }}>
+                        <Flag size={11} /> Znak qo'yish
+                      </button>
+                    </div>
+                  )}
                   <div className="flex gap-2">
-                    <button onClick={() => setActiveTable(t)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><ShoppingBasket size={13} /> Qo'shish</button>
+                    {playing ? (
+                      <>
+                        <button onClick={() => setActiveTable(t)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><ShoppingBasket size={13} /> Qo'shish</button>
+                        <button onClick={() => onPause(t.id)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: "#d19a4f", color: FELT_DARK }}>Pauza</button>
+                      </>
+                    ) : (
+                      <button onClick={() => onResume(t.id)} className="flex-1 py-2 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Davom ettirish</button>
+                    )}
                     <button onClick={() => setConfirmClose(t)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: RED, color: "#fff" }}>Yopish</button>
                   </div>
                 </>
