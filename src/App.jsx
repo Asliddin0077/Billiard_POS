@@ -624,9 +624,6 @@ export default function BilliardPOS() {
           onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem}
           onOpenHall={(id) => { setActiveHallId(id); setScreen("hall"); }}
           onLogout={handleLogout} onStats={() => setScreen("stats")}
-          onStart={(tid, targetSeconds, prepaidAmount) => startTable(activeHallId, tid, targetSeconds, prepaidAmount)}
-          onPause={(tid) => pauseTable(activeHallId, tid)}
-          onResume={(tid) => resumeTable(activeHallId, tid)}
           onSupport={() => { markReadByUser(); setScreen("support"); }}
           unreadCount={userUnreadCount} onChangePassword={changeOwnPassword}
         />
@@ -640,6 +637,8 @@ export default function BilliardPOS() {
           onEditTable={(tid, name, rate) => editTable(activeHallId, tid, name, rate)}
           onDeleteTable={(tid) => deleteTable(activeHallId, tid)}
           onStart={(tid, targetSeconds, prepaidAmount) => startTable(activeHallId, tid, targetSeconds, prepaidAmount)}
+          onPause={(tid) => pauseTable(activeHallId, tid)}
+          onResume={(tid) => resumeTable(activeHallId, tid)}
           onAddExtra={(tid, extra) => addExtra(activeHallId, tid, extra)}
           onClose={(tid, record) => closeTable(activeHallId, tid, record)}
           onUpdateNote={(tid, note) => updateTableNote(activeHallId, tid, note)}
@@ -1043,7 +1042,8 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
 }
 
 // ---------------- HALL ----------------
-function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {  const [showCreate, setShowCreate] = useState(false);
+function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {
+  const [showCreate, setShowCreate] = useState(false);
   const [editTableObj, setEditTableObj] = useState(null);
   const [tName, setTName] = useState(""); const [tRate, setTRate] = useState("");
   const [activeTable, setActiveTable] = useState(null);
@@ -1090,7 +1090,7 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
     hall.tables.forEach((t) => {
       if (t.status === "playing" && t.targetSeconds && t.startTime) {
         const key = `${t.id}-${t.startTime}`;
-        const elapsed = (now - t.startTime) / 1000;
+        const elapsed = (now - t.startTime) / 1000 - (t.pausedSeconds || 0);
         if (elapsed >= t.targetSeconds && !alertedTables[key]) {
           playAlertSound();
           setAlertedTables((prev) => ({ ...prev, [key]: true }));
@@ -1105,7 +1105,8 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
       return Math.max(0, (t.pausedAt - t.startTime) / 1000 - (t.pausedSeconds || 0));
     }
     return t.status !== "playing" || !t.startTime ? 0 : Math.max(0, (now - t.startTime) / 1000 - (t.pausedSeconds || 0));
-  }  function tableCost(t) { return (elapsedSeconds(t) / 3600) * t.rate; }
+  }
+  function tableCost(t) { return (elapsedSeconds(t) / 3600) * t.rate; }
   function extrasTotal(t) { return t.extras.reduce((s, e) => s + e.price, 0); }
   const filteredBar = bar.filter((b) => b.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -1176,10 +1177,10 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
                     {playing ? (
                       <>
                         <button onClick={() => setActiveTable(t)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><ShoppingBasket size={13} /> Qo'shish</button>
-                        <button onClick={() => onPause(t.id)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: "#d19a4f", color: FELT_DARK }}>Pauza</button>
+                        <button type="button" onClick={() => onPause && onPause(t.id)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: "#d19a4f", color: FELT_DARK }}>Pauza</button>
                       </>
                     ) : (
-                      <button onClick={() => onResume(t.id)} className="flex-1 py-2 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Davom ettirish</button>
+                      <button type="button" onClick={() => onResume && onResume(t.id)} className="flex-1 py-2 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Davom ettirish</button>
                     )}
                     <button onClick={() => setConfirmClose(t)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: RED, color: "#fff" }}>Yopish</button>
                   </div>
