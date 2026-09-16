@@ -15,6 +15,7 @@ const GOLD = "#c9a227";
 const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
+const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -97,7 +98,16 @@ function mapTable(row) {
     laps: (row.table_laps || []).map(mapLap).sort((a, b) => a.end - b.end),
   };
 }
-function mapHall(row) { return { id: row.id, name: row.name, tables: (row.billiard_tables || []).map(mapTable) }; }
+const tableOrderMemory = new Map(); // stol id -> birinchi ko'rilgan tartib raqami
+let tableOrderCounter = 0;
+function stableTableOrder(tables) {
+  return [...tables].sort((a, b) => {
+    if (!tableOrderMemory.has(a.id)) tableOrderMemory.set(a.id, tableOrderCounter++);
+    if (!tableOrderMemory.has(b.id)) tableOrderMemory.set(b.id, tableOrderCounter++);
+    return tableOrderMemory.get(a.id) - tableOrderMemory.get(b.id);
+  });
+}
+function mapHall(row) { return { id: row.id, name: row.name, tables: stableTableOrder((row.billiard_tables || []).map(mapTable)) }; }
 function mapBarItem(row) { return { id: row.id, name: row.name, price: Number(row.price), emoji: row.emoji, color: row.color }; }
 function mapHistory(row) {
   return {
@@ -234,7 +244,7 @@ export default function BilliardPOS() {
           } else if (s.userId) {
             const { data } = await supabase.from("users").select("*").eq("id", s.userId).single();
             if (data) {
-              if (s.token && data.active_session_token && data.active_session_token !== s.token) {
+              if (SINGLE_DEVICE_LOGIN && s.token && data.active_session_token && data.active_session_token !== s.token) {
                 localStorage.removeItem(SESSION_KEY);
                 showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
               } else {
@@ -258,7 +268,7 @@ export default function BilliardPOS() {
   const anyPlaying = halls.some((h) => h.tables.some((t) => t.status === "playing"));
 
   useEffect(() => {
-    if (!currentUser || !sessionToken) return;
+    if (!SINGLE_DEVICE_LOGIN || !currentUser || !sessionToken) return;
     const interval = setInterval(async () => {
       const { data } = await supabase.from("users").select("active_session_token").eq("id", currentUser.id).single();
       if (data && data.active_session_token && data.active_session_token !== sessionToken) {
