@@ -16,6 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
+const APP_VERSION = "1.0.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.0.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -202,6 +203,8 @@ export default function BilliardPOS() {
   }, []);
   const [now, setNow] = useState(Date.now());
   const [activeHallId, setActiveHallId] = useState(null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
   const [currentUser, setCurrentUser] = useState(null);
   const [sessionToken, setSessionToken] = useState(null);
@@ -286,6 +289,33 @@ export default function BilliardPOS() {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [anyPlaying]);
+  useEffect(() => {
+    async function checkVersion() {
+      try {
+        const { data } = await supabase.from("app_meta").select("latest_version").eq("id", 1).single();
+        if (data && data.latest_version && data.latest_version !== APP_VERSION) setUpdateAvailable(true);
+      } catch (e) {}
+    }
+    checkVersion();
+    const id = setInterval(checkVersion, 60000);
+    function onVisible() { if (document.visibilityState === "visible") checkVersion(); }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+  async function forceAppUpdate() {
+    setUpdating(true);
+    try {
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+      if ("caches" in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch (e) {}
+    window.location.reload();
+  }
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(null), 2400);
@@ -610,6 +640,21 @@ export default function BilliardPOS() {
         <div style={{ background: GOLD, color: FELT_DARK, top: "calc(var(--safe-top) + 16px)" }}
           className="fixed left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full text-sm font-medium shadow-lg font-display max-w-[90vw] text-center">
           {toast}
+        </div>
+      )}
+
+      {updateAvailable && (
+        <div style={{ background: "#0e4a36", border: `1px solid ${GOLD}`, top: "calc(var(--safe-top) + 16px)" }}
+          className="fixed left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-2xl shadow-lg flex items-center gap-2 max-w-[92vw]">
+          <span className="text-xs font-medium" style={{ color: CREAM }}>🔔 Yangi versiya chiqdi</span>
+          <button
+            disabled={updating}
+            onClick={forceAppUpdate}
+            className="px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1"
+            style={{ background: GOLD, color: FELT_DARK }}
+          >
+            {updating ? <Loader2 size={12} className="animate-spin" /> : null} Yangilash
+          </button>
         </div>
       )}
 
