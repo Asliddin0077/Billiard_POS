@@ -3,7 +3,7 @@ import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
   Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
-  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText
+  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -454,6 +454,23 @@ export default function BilliardPOS() {
     }).eq("id", tableId);
     await refreshOwnerData();
   }
+  async function transferTable(sourceHallId, sourceTableId, destHallId, destTableId) {
+    const sourceHall = halls.find((h) => h.id === sourceHallId);
+    const source = sourceHall && sourceHall.tables.find((t) => t.id === sourceTableId);
+    if (!source || !destTableId) return;
+    await supabase.from("billiard_tables").update({
+      status: source.status, start_time: source.startTime ? new Date(source.startTime).toISOString() : null,
+      note: source.note || null, target_seconds: source.targetSeconds, prepaid_amount: source.prepaidAmount,
+      paused_at: source.pausedAt ? new Date(source.pausedAt).toISOString() : null, paused_seconds: source.pausedSeconds || 0,
+    }).eq("id", destTableId);
+    await supabase.from("table_extras").update({ table_id: destTableId }).eq("table_id", sourceTableId);
+    await supabase.from("table_laps").update({ table_id: destTableId }).eq("table_id", sourceTableId);
+    await supabase.from("billiard_tables").update({
+      status: "free", start_time: null, note: null, target_seconds: null, prepaid_amount: null,
+      paused_at: null, paused_seconds: 0,
+    }).eq("id", sourceTableId);
+    await refreshOwnerData();
+  }
   async function addExtra(hallId, tableId, extra) {
     await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
     await refreshOwnerData();
@@ -686,7 +703,7 @@ export default function BilliardPOS() {
 
       {screen === "hall" && currentUser && (
         <HallScreen
-          hall={halls.find((h) => h.id === activeHallId)} bar={bar} now={now}
+          hall={halls.find((h) => h.id === activeHallId)} allHalls={halls} bar={bar} now={now}
           onBack={() => setScreen("halls")}
           onCreateTable={(name, rate) => createTable(activeHallId, name, rate)}
           onEditTable={(tid, name, rate) => editTable(activeHallId, tid, name, rate)}
@@ -694,6 +711,7 @@ export default function BilliardPOS() {
           onStart={(tid, targetSeconds, prepaidAmount) => startTable(activeHallId, tid, targetSeconds, prepaidAmount)}
           onPause={(tid) => pauseTable(activeHallId, tid)}
           onResume={(tid) => resumeTable(activeHallId, tid)}
+          onTransfer={(tid, destHallId, destTableId) => transferTable(activeHallId, tid, destHallId, destTableId)}
           onAddExtra={(tid, extra) => addExtra(activeHallId, tid, extra)}
           onClose={(tid, record) => closeTable(activeHallId, tid, record)}
           onUpdateNote={(tid, note) => updateTableNote(activeHallId, tid, note)}
@@ -1097,7 +1115,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
 }
 
 // ---------------- HALL ----------------
-function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {
+function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editTableObj, setEditTableObj] = useState(null);
   const [tName, setTName] = useState(""); const [tRate, setTRate] = useState("");
@@ -1112,6 +1130,8 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
   const [noteTable, setNoteTable] = useState(null);
   const [noteText, setNoteText] = useState("");
   const [lapTable, setLapTable] = useState(null);
+  const [transferTable, setTransferTable] = useState(null);
+  const [transferDest, setTransferDest] = useState(null);
   const [lapComment, setLapComment] = useState("");
   const [justAdded, setJustAdded] = useState(null);
 
@@ -1228,16 +1248,21 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
                       </button>
                     </div>
                   )}
-                  <div className="flex gap-2">
-                    {playing ? (
-                      <>
-                        <button onClick={() => setActiveTable(t)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><ShoppingBasket size={13} /> Qo'shish</button>
-                        <button type="button" onClick={() => onPause && onPause(t.id)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: "#d19a4f", color: FELT_DARK }}>Pauza</button>
-                      </>
-                    ) : (
-                      <button type="button" onClick={() => onResume && onResume(t.id)} className="flex-1 py-2 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Davom ettirish</button>
+                  <div className="flex gap-2 mb-1.5">
+                    {playing && (
+                      <button onClick={() => setActiveTable(t)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><ShoppingBasket size={13} /> Qo'shish</button>
                     )}
-                    <button onClick={() => setConfirmClose(t)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: RED, color: "#fff" }}>Yopish</button>
+                    <button type="button" onClick={() => { setTransferTable(t); setTransferDest(null); }} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: GOLD }}>
+                      <ArrowLeftRight size={13} /> O'tkazish
+                    </button>
+                  </div>
+                  <div className="flex gap-1.5">
+                    {playing ? (
+                      <button type="button" onClick={() => onPause && onPause(t.id)} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium" style={{ background: "#d19a4f", color: FELT_DARK }}>Pauza</button>
+                    ) : (
+                      <button type="button" onClick={() => onResume && onResume(t.id)} className="flex-1 py-1.5 rounded-lg text-[11px] font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Davom ettirish</button>
+                    )}
+                    <button onClick={() => setConfirmClose(t)} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium" style={{ background: RED, color: "#fff" }}>Yopish</button>
                   </div>
                 </>
               ) : (
@@ -1385,6 +1410,43 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
             className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <button onClick={() => { onAddLap(lapTable.id, lapComment.trim()); setLapTable(null); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
             <Flag size={15} /> Znak qo'yish
+          </button>
+        </Modal>
+      )}
+
+      {transferTable && (
+        <Modal onClose={() => { setTransferTable(null); setTransferDest(null); }}>
+          <h2 className="font-display text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: CREAM }}><ArrowLeftRight size={17} /> "{transferTable.name}"ni ko'chirish</h2>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Hisoblagich, izoh va mahsulotlar shu bo'sh stolga o'tadi, "{transferTable.name}" esa bo'shab qoladi.</p>
+          <div className="max-h-64 overflow-y-auto mb-4 space-y-3">
+            {(allHalls || []).map((h) => {
+              const freeTables = h.tables.filter((t) => t.status === "free" && t.id !== transferTable.id);
+              if (freeTables.length === 0) return null;
+              return (
+                <div key={h.id}>
+                  <div className="text-[11px] font-semibold mb-1.5" style={{ color: "#b8c9bf" }}>{h.name}</div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {freeTables.map((t) => (
+                      <button key={t.id} onClick={() => setTransferDest({ hallId: h.id, tableId: t.id })}
+                        className="py-2 rounded-lg text-xs font-medium"
+                        style={{ background: transferDest && transferDest.tableId === t.id ? GOLD : FELT_DARK, color: transferDest && transferDest.tableId === t.id ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                        {t.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {(allHalls || []).every((h) => h.tables.filter((t) => t.status === "free" && t.id !== transferTable.id).length === 0) && (
+              <p className="text-sm text-center py-4" style={{ color: "#b8c9bf" }}>Hozircha bo'sh stol yo'q</p>
+            )}
+          </div>
+          <button disabled={!transferDest} onClick={() => {
+            onTransfer(transferTable.id, transferDest.hallId, transferDest.tableId);
+            onToast(`✅ "${transferTable.name}" ko'chirildi`);
+            setTransferTable(null); setTransferDest(null);
+          }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Ko'chirish
           </button>
         </Modal>
       )}
