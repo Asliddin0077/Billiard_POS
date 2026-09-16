@@ -293,7 +293,7 @@ export default function BilliardPOS() {
     async function checkVersion() {
       try {
         const { data } = await supabase.from("app_meta").select("latest_version").eq("id", 1).single();
-        if (data && data.latest_version && data.latest_version !== APP_VERSION) setUpdateAvailable(true);
+        if (data && data.latest_version) setUpdateAvailable(data.latest_version !== APP_VERSION);
       } catch (e) {}
     }
     checkVersion();
