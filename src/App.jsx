@@ -3,7 +3,7 @@ import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
   Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
-  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText
+  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight, Boxes, Wallet, Minus
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -16,6 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
+const APP_VERSION = "1.1.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.1.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -76,7 +77,7 @@ function mapUser(row) {
   if (!row) return null;
   return {
     id: row.id, name: row.name, phone: row.phone, login: row.login,
-    subscribed: row.subscribed, accountType: row.account_type,
+    subscribed: row.subscribed, accountType: row.account_type, betaAccess: !!row.beta_access,
     banned: row.banned, banUntil: row.ban_until ? new Date(row.ban_until).getTime() : null,
     banReason: row.ban_reason || "", createdAt: new Date(row.created_at).getTime(),
     subscriptionUntil: row.subscription_until ? new Date(row.subscription_until).getTime() : null,
@@ -124,20 +125,37 @@ function mapPromo(row) { return { code: row.code, durationDays: row.duration_day
 function mapChat(row) { return { id: row.id, ownerId: row.owner_id, from: row.from_role, text: row.message, broadcast: row.broadcast, readByAdmin: row.read_by_admin, readByUser: row.read_by_user, ts: new Date(row.created_at).getTime() }; }
 function mapAdmin(row) { return { login: row.login, name: row.name, createdAt: new Date(row.created_at).getTime() }; }
 function mapPlan(row) { return { id: row.id, label: row.label, months: Number(row.months), days: row.days, price: Number(row.price), active: row.active }; }
+function mapWarehouseItem(row) { return { id: row.id, barItemId: row.bar_item_id, name: row.name, units: Number(row.units_in_stock || 0) }; }
+function mapWarehouseLog(row) {
+  return { id: row.id, warehouseItemId: row.warehouse_item_id, changeUnits: Number(row.change_units), type: row.type,
+    blocks: row.blocks != null ? Number(row.blocks) : null, unitsPerBlock: row.units_per_block != null ? Number(row.units_per_block) : null,
+    note: row.note || "", entryDate: row.entry_date, createdAt: new Date(row.created_at).getTime() };
+}
+function mapDebt(row) {
+  return { id: row.id, name: row.debtor_name, phone: row.debtor_phone || "", amount: Number(row.amount), paidAmount: Number(row.paid_amount || 0),
+    debtDate: row.debt_date, dueDate: row.due_date, note: row.note || "", status: row.status,
+    createdAt: new Date(row.created_at).getTime(), closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null };
+}
 
 // ---------------- data fetch helpers ----------------
 async function fetchOwnerData(ownerId) {
-  const [hallsRes, barRes, histRes, chatRes] = await Promise.all([
+  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes] = await Promise.all([
     supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at"),
     supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
     supabase.from("chats").select("*").eq("owner_id", ownerId).order("created_at"),
+    supabase.from("warehouse_items").select("*").eq("owner_id", ownerId).order("created_at"),
+    supabase.from("warehouse_logs").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }).limit(300),
+    supabase.from("debts").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }),
   ]);
   return {
     halls: (hallsRes.data || []).map(mapHall),
     bar: (barRes.data || []).map(mapBarItem),
     history: (histRes.data || []).map(mapHistory),
     chats: (chatRes.data || []).map(mapChat),
+    warehouseItems: (whItemsRes.data || []).map(mapWarehouseItem),
+    warehouseLogs: (whLogsRes.data || []).map(mapWarehouseLog),
+    debts: (debtsRes.data || []).map(mapDebt),
   };
 }
 async function fetchAdminData() {
@@ -202,6 +220,8 @@ export default function BilliardPOS() {
   }, []);
   const [now, setNow] = useState(Date.now());
   const [activeHallId, setActiveHallId] = useState(null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
   const [currentUser, setCurrentUser] = useState(null);
   const [sessionToken, setSessionToken] = useState(null);
@@ -210,6 +230,9 @@ export default function BilliardPOS() {
 
   const [halls, setHalls] = useState([]);
   const [bar, setBar] = useState([]);
+  const [warehouseItems, setWarehouseItems] = useState([]);
+  const [warehouseLogs, setWarehouseLogs] = useState([]);
+  const [debts, setDebts] = useState([]);
   const [history, setHistory] = useState([]);
   const [myChat, setMyChat] = useState([]);
 
@@ -253,7 +276,7 @@ export default function BilliardPOS() {
                 if (isBanned(u)) { setScreen("banned"); }
                 else {
                   const od = await fetchOwnerData(u.id);
-                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats);
+                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts);
                   setScreen(canAccess(u) ? "halls" : "subscribe");
                 }
               }
@@ -274,7 +297,7 @@ export default function BilliardPOS() {
       if (data && data.active_session_token && data.active_session_token !== sessionToken) {
         localStorage.removeItem(SESSION_KEY);
         setCurrentUser(null); setSessionToken(null);
-        setHalls([]); setBar([]); setHistory([]); setMyChat([]);
+        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]);
         setScreen("auth");
         showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
       }
@@ -287,6 +310,33 @@ export default function BilliardPOS() {
     return () => clearInterval(id);
   }, [anyPlaying]);
   useEffect(() => {
+    async function checkVersion() {
+      try {
+        const { data } = await supabase.from("app_meta").select("latest_version").eq("id", 1).single();
+        if (data && data.latest_version) setUpdateAvailable(data.latest_version !== APP_VERSION);
+      } catch (e) {}
+    }
+    checkVersion();
+    const id = setInterval(checkVersion, 60000);
+    function onVisible() { if (document.visibilityState === "visible") checkVersion(); }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+  async function forceAppUpdate() {
+    setUpdating(true);
+    try {
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+      if ("caches" in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch (e) {}
+    window.location.reload();
+  }
+  useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(null), 2400);
     return () => clearTimeout(id);
@@ -297,7 +347,7 @@ export default function BilliardPOS() {
 
   async function refreshOwnerData(ownerId) {
     const od = await fetchOwnerData(ownerId || currentUser.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts);
   }
   async function refreshMyChat() {
     const { data } = await supabase.from("chats").select("*").eq("owner_id", currentUser.id).order("created_at");
@@ -319,7 +369,7 @@ export default function BilliardPOS() {
     const token = crypto.randomUUID();
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     try { localStorage.setItem(`billiard-pos-newuser-${u.id}`, "1"); } catch (e) {}
-    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]);
+    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]);
     persistSession({ userId: u.id, isAdmin: false, token });
     setScreen("subscribe");
   }
@@ -364,14 +414,14 @@ export default function BilliardPOS() {
     persistSession({ userId: u.id, isAdmin: false, token });
     if (isBanned(u)) { setScreen("banned"); return; }
     const od = await fetchOwnerData(u.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts);
     setScreen(canAccess(u) ? "halls" : "subscribe");
   }
 
   function handleLogout() {
     persistSession({ userId: null, isAdmin: false });
     setCurrentUser(null); setSessionToken(null); setIsAdmin(false); setAdminLogin(null);
-    setHalls([]); setBar([]); setHistory([]); setMyChat([]);
+    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]);
     setUsers([]); setPromoCodes([]); setAdminAccounts([]); setChatsByUser({});
     setActiveHallId(null); setScreen("auth");
   }
@@ -424,8 +474,94 @@ export default function BilliardPOS() {
     }).eq("id", tableId);
     await refreshOwnerData();
   }
+  async function transferTable(sourceHallId, sourceTableId, destHallId, destTableId) {
+    const sourceHall = halls.find((h) => h.id === sourceHallId);
+    const source = sourceHall && sourceHall.tables.find((t) => t.id === sourceTableId);
+    if (!source || !destTableId) return;
+    await supabase.from("billiard_tables").update({
+      status: source.status, start_time: source.startTime ? new Date(source.startTime).toISOString() : null,
+      note: source.note || null, target_seconds: source.targetSeconds, prepaid_amount: source.prepaidAmount,
+      paused_at: source.pausedAt ? new Date(source.pausedAt).toISOString() : null, paused_seconds: source.pausedSeconds || 0,
+    }).eq("id", destTableId);
+    await supabase.from("table_extras").update({ table_id: destTableId }).eq("table_id", sourceTableId);
+    await supabase.from("table_laps").update({ table_id: destTableId }).eq("table_id", sourceTableId);
+    await supabase.from("billiard_tables").update({
+      status: "free", start_time: null, note: null, target_seconds: null, prepaid_amount: null,
+      paused_at: null, paused_seconds: 0,
+    }).eq("id", sourceTableId);
+    await refreshOwnerData();
+  }
   async function addExtra(hallId, tableId, extra) {
-    await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
+    if (extra.barItemId && currentUser && currentUser.betaAccess) {
+      const wi = warehouseItems.find((w) => w.barItemId === extra.barItemId);
+      if (!wi || wi.units <= 0) {
+        showToast(`❌ Skladda "${extra.name}" qolmagan`);
+        return;
+      }
+      await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
+      await supabase.from("warehouse_items").update({ units_in_stock: wi.units - 1 }).eq("id", wi.id);
+      await supabase.from("warehouse_logs").insert({
+        warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -1, type: "sale",
+        note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
+      });
+    } else {
+      await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
+    }
+    await refreshOwnerData();
+  }
+  async function addStock(barItemId, name, blocks, unitsPerBlock, entryDate, note) {
+    const units = (Number(blocks) || 0) * (Number(unitsPerBlock) || 0);
+    if (units <= 0) return;
+    let wi = warehouseItems.find((w) => w.barItemId === barItemId);
+    if (!wi) {
+      const { data, error } = await supabase.from("warehouse_items").insert({
+        owner_id: currentUser.id, bar_item_id: barItemId, name, units_in_stock: 0,
+      }).select().single();
+      if (error) { showToast(`❌ Xatolik: ${error.message}`); return; }
+      wi = mapWarehouseItem(data);
+    }
+    const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units + units }).eq("id", wi.id);
+    if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
+    const r2 = await supabase.from("warehouse_logs").insert({
+      warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: units, type: "add",
+      blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: entryDate,
+    });
+    if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
+    await refreshOwnerData();
+  }
+  async function removeStock(warehouseItemId, blocks, unitsPerBlock, note) {
+    const wi = warehouseItems.find((w) => w.id === warehouseItemId);
+    if (!wi) return;
+    const units = (Number(blocks) || 0) * (Number(unitsPerBlock) || 1);
+    if (units <= 0) return;
+    const r1 = await supabase.from("warehouse_items").update({ units_in_stock: Math.max(0, wi.units - units) }).eq("id", wi.id);
+    if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
+    const r2 = await supabase.from("warehouse_logs").insert({
+      warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -units, type: "remove",
+      blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: new Date().toISOString().slice(0, 10),
+    });
+    if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
+    await refreshOwnerData();
+  }
+  async function addDebt(name, phone, amount, debtDate, dueDate, note) {
+    const r = await supabase.from("debts").insert({
+      owner_id: currentUser.id, debtor_name: name, debtor_phone: phone || null, amount: Number(amount),
+      debt_date: debtDate, due_date: dueDate || null, note: note || null,
+    });
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    await refreshOwnerData();
+  }
+  async function payDebt(debtId, payAmount) {
+    const d = debts.find((x) => x.id === debtId);
+    if (!d) return;
+    const remaining = d.amount - d.paidAmount;
+    const applied = payAmount == null ? remaining : Math.min(Number(payAmount), remaining);
+    const newPaid = d.paidAmount + applied;
+    const closed = newPaid >= d.amount;
+    const r = await supabase.from("debts").update({
+      paid_amount: newPaid, status: closed ? "closed" : "open", closed_at: closed ? new Date().toISOString() : null,
+    }).eq("id", debtId);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     await refreshOwnerData();
   }
   async function updateTableNote(hallId, tableId, note) {
@@ -534,6 +670,11 @@ export default function BilliardPOS() {
     await supabase.from("users").update({ account_type: u.accountType === "vip" ? "oddiy" : "vip" }).eq("id", userId);
     await loadAdmin();
   }
+  async function toggleBetaAccess(userId) {
+    const u = users.find((x) => x.id === userId);
+    await supabase.from("users").update({ beta_access: !u.betaAccess }).eq("id", userId);
+    await loadAdmin();
+  }
   async function banUser(userId, days, hours, reason) {
     const ms = (Number(days) || 0) * 86400000 + (Number(hours) || 0) * 3600000;
     await supabase.from("users").update({ banned: true, ban_until: new Date(Date.now() + ms).toISOString(), ban_reason: reason }).eq("id", userId);
@@ -613,6 +754,21 @@ export default function BilliardPOS() {
         </div>
       )}
 
+      {updateAvailable && (
+        <div style={{ background: "#0e4a36", border: `1px solid ${GOLD}`, top: "calc(var(--safe-top) + 16px)" }}
+          className="fixed left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-2xl shadow-lg flex items-center gap-2 max-w-[92vw]">
+          <span className="text-xs font-medium" style={{ color: CREAM }}>🔔 Yangi versiya chiqdi</span>
+          <button
+            disabled={updating}
+            onClick={forceAppUpdate}
+            className="px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1"
+            style={{ background: GOLD, color: FELT_DARK }}
+          >
+            {updating ? <Loader2 size={12} className="animate-spin" /> : null} Yangilash
+          </button>
+        </div>
+      )}
+
       {installPrompt && (
         <button
           onClick={async () => { installPrompt.prompt(); await installPrompt.userChoice; setInstallPrompt(null); }}
@@ -634,14 +790,30 @@ export default function BilliardPOS() {
           onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem}
           onOpenHall={(id) => { setActiveHallId(id); setScreen("hall"); }}
           onLogout={handleLogout} onStats={() => setScreen("stats")}
+          onWarehouse={() => setScreen("warehouse")} onDebts={() => setScreen("debts")}
           onSupport={() => { markReadByUser(); setScreen("support"); }}
           unreadCount={userUnreadCount} onChangePassword={changeOwnPassword}
         />
       )}
 
+      {screen === "warehouse" && currentUser && currentUser.betaAccess && (
+        <WarehouseScreen
+          bar={bar} warehouseItems={warehouseItems} warehouseLogs={warehouseLogs}
+          onBack={() => setScreen("halls")}
+          onAddStock={addStock} onRemoveStock={removeStock} onToast={showToast}
+        />
+      )}
+
+      {screen === "debts" && currentUser && currentUser.betaAccess && (
+        <DebtsScreen
+          debts={debts} onBack={() => setScreen("halls")}
+          onAddDebt={addDebt} onPayDebt={payDebt} onToast={showToast}
+        />
+      )}
+
       {screen === "hall" && currentUser && (
         <HallScreen
-          hall={halls.find((h) => h.id === activeHallId)} bar={bar} now={now}
+          hall={halls.find((h) => h.id === activeHallId)} allHalls={halls} bar={bar} now={now}
           onBack={() => setScreen("halls")}
           onCreateTable={(name, rate) => createTable(activeHallId, name, rate)}
           onEditTable={(tid, name, rate) => editTable(activeHallId, tid, name, rate)}
@@ -649,6 +821,7 @@ export default function BilliardPOS() {
           onStart={(tid, targetSeconds, prepaidAmount) => startTable(activeHallId, tid, targetSeconds, prepaidAmount)}
           onPause={(tid) => pauseTable(activeHallId, tid)}
           onResume={(tid) => resumeTable(activeHallId, tid)}
+          onTransfer={(tid, destHallId, destTableId) => transferTable(activeHallId, tid, destHallId, destTableId)}
           onAddExtra={(tid, extra) => addExtra(activeHallId, tid, extra)}
           onClose={(tid, record) => closeTable(activeHallId, tid, record)}
           onUpdateNote={(tid, note) => updateTableNote(activeHallId, tid, note)}
@@ -664,7 +837,7 @@ export default function BilliardPOS() {
         <AdminScreen
           users={users} promoCodes={promoCodes} chats={chatsByUser} adminAccounts={adminAccounts}
           plans={plans} onAddPlan={addPlan} onDeletePlan={deletePlan}
-          onAddPromo={addPromo} onToggleSub={toggleUserSub} onToggleVip={toggleVip}
+          onAddPromo={addPromo} onToggleSub={toggleUserSub} onToggleVip={toggleVip} onToggleBetaAccess={toggleBetaAccess}
           onBan={banUser} onUnban={unbanUser} onAddAdmin={addAdmin} onAddUser={addUserDirect}
           onDeleteAdmin={deleteAdmin} onDeleteUser={deleteUser} onChangePassword={changeAdminPassword}
           isSuperAdmin={(adminLogin || "").toLowerCase() === "asliddin"}
@@ -864,7 +1037,7 @@ function SubscribeScreen({ user, plans, onPromo, onLogout }) {
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onOpenHall, onLogout, onStats, onSupport, unreadCount, onChangePassword }) {
+function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onSupport, unreadCount, onChangePassword }) {
   const [tab, setTab] = useState("halls");
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -915,6 +1088,17 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         </div>
       </div>
       <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
+
+      {user.betaAccess && (
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <button onClick={onWarehouse} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <Boxes size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Sklad</span>
+          </button>
+          <button onClick={onDebts} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <Wallet size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Qarz daftari</span>
+          </button>
+        </div>
+      )}
 
       {isNewUser && (
         <button onClick={openGuide} style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}` }}
@@ -1051,8 +1235,308 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
   );
 }
 
+// ---------------- SKLAD ----------------
+function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStock, onRemoveStock, onToast }) {
+  const [tab, setTab] = useState("stock"); // stock | report
+  const [showAdd, setShowAdd] = useState(false);
+  const [pickedBarItem, setPickedBarItem] = useState(null);
+  const [blocks, setBlocks] = useState("");
+  const [unitsPerBlock, setUnitsPerBlock] = useState("");
+  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [note, setNote] = useState("");
+  const [removeItem, setRemoveItem] = useState(null);
+  const [rmBlocks, setRmBlocks] = useState("");
+  const [rmUnitsPerBlock, setRmUnitsPerBlock] = useState("1");
+  const [rmNote, setRmNote] = useState("");
+
+  function itemLog(id) { return warehouseLogs.filter((l) => l.warehouseItemId === id); }
+
+  return (
+    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
+        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><Boxes size={18} style={{ color: GOLD }} /> Sklad</h1>
+      </div>
+
+      <div className="flex gap-2 mb-5">
+        <button onClick={() => setTab("stock")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "stock" ? GOLD : FELT, color: tab === "stock" ? FELT_DARK : CREAM }}>Qoldiq</button>
+        <button onClick={() => setTab("report")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "report" ? GOLD : FELT, color: tab === "report" ? FELT_DARK : CREAM }}>Hisobot</button>
+      </div>
+
+      {tab === "stock" && (
+        <>
+          <button onClick={() => { setShowAdd(true); setPickedBarItem(null); setBlocks(""); setUnitsPerBlock(""); setNote(""); setEntryDate(new Date().toISOString().slice(0, 10)); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full mb-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
+            <Plus size={16} /> Tovar qo'shish
+          </button>
+
+          {warehouseItems.length === 0 ? (
+            <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha sklad bo'sh</p>
+          ) : (
+            <div className="space-y-2">
+              {warehouseItems.map((w) => (
+                <div key={w.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium" style={{ color: CREAM }}>{w.name}</div>
+                    <div className="text-xs" style={{ color: "#b8c9bf" }}>{w.units} dona qoldi</div>
+                  </div>
+                  <button onClick={() => { setRemoveItem(w); setRmBlocks(""); setRmUnitsPerBlock("1"); setRmNote(""); }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1" style={{ background: FELT_DARK, color: "#ff8a8a" }}>
+                    <Minus size={12} /> Ayirish
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === "report" && (
+        <div className="space-y-2">
+          {warehouseLogs.length === 0 ? (
+            <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha yozuv yo'q</p>
+          ) : warehouseLogs.map((l) => {
+            const wi = warehouseItems.find((w) => w.id === l.warehouseItemId);
+            return (
+              <div key={l.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14 }} className="p-3 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium" style={{ color: CREAM }}>{wi ? wi.name : "?"}</div>
+                  <div className="text-[11px]" style={{ color: "#b8c9bf" }}>
+                    {l.entryDate} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : "sotildi"}{l.note ? ` · ${l.note}` : ""}
+                  </div>
+                </div>
+                <div className="text-sm font-semibold" style={{ color: l.changeUnits > 0 ? "#7fd99a" : "#ff8a8a" }}>
+                  {l.changeUnits > 0 ? "+" : ""}{l.changeUnits}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showAdd && (
+        <Modal onClose={() => setShowAdd(false)}>
+          <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Tovar qo'shish</h2>
+          <div className="mb-3">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Mahsulot</label>
+            <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
+              {bar.map((b) => (
+                <button key={b.id} onClick={() => setPickedBarItem(b)} className="py-2 rounded-lg text-xs font-medium"
+                  style={{ background: pickedBarItem && pickedBarItem.id === b.id ? GOLD : FELT_DARK, color: pickedBarItem && pickedBarItem.id === b.id ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                  {b.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div>
+              <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha blok</label>
+              <input type="number" value={blocks} onChange={(e) => setBlocks(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+            </div>
+            <div>
+              <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>1 blokda nechta</label>
+              <input type="number" value={unitsPerBlock} onChange={(e) => setUnitsPerBlock(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+            </div>
+          </div>
+          <div className="mb-3">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Sana</label>
+            <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          </div>
+          {blocks && unitsPerBlock && (
+            <p className="text-xs mb-3" style={{ color: GOLD }}>Jami: {Number(blocks) * Number(unitsPerBlock)} dona qo'shiladi</p>
+          )}
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy)"
+            className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <button disabled={!pickedBarItem || !blocks || !unitsPerBlock}
+            onClick={() => {
+              onAddStock(pickedBarItem.id, pickedBarItem.name, blocks, unitsPerBlock, entryDate, note.trim());
+              onToast(`✅ ${pickedBarItem.name} skladga qo'shildi`);
+              setShowAdd(false);
+            }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Qo'shish
+          </button>
+        </Modal>
+      )}
+
+      {removeItem && (
+        <Modal onClose={() => setRemoveItem(null)}>
+          <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{removeItem.name}"dan ayirish</h2>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Hozir: {removeItem.units} dona</p>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div>
+              <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha blok</label>
+              <input type="number" value={rmBlocks} onChange={(e) => setRmBlocks(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+            </div>
+            <div>
+              <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>1 blokda nechta</label>
+              <input type="number" value={rmUnitsPerBlock} onChange={(e) => setRmUnitsPerBlock(e.target.value)} placeholder="1" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+            </div>
+          </div>
+          <textarea value={rmNote} onChange={(e) => setRmNote(e.target.value)} rows={2} placeholder="Sababi (ixtiyoriy) — masalan adashib ko'p qo'shilgan edi"
+            className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <button disabled={!rmBlocks}
+            onClick={() => {
+              onRemoveStock(removeItem.id, rmBlocks, rmUnitsPerBlock, rmNote.trim());
+              onToast(`✅ ${removeItem.name}dan ayrildi`);
+              setRemoveItem(null);
+            }}
+            style={{ background: RED, color: "#fff" }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Ayirish
+          </button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ---------------- QARZ DAFTARI ----------------
+function DebtsScreen({ debts, onBack, onAddDebt, onPayDebt, onToast }) {
+  const [tab, setTab] = useState("open"); // open | closed
+  const [showAdd, setShowAdd] = useState(false);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [amount, setAmount] = useState("");
+  const [debtDate, setDebtDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dueDate, setDueDate] = useState("");
+  const [note, setNote] = useState("");
+  const [payTarget, setPayTarget] = useState(null);
+  const [payAmount, setPayAmount] = useState("");
+
+  const today = new Date().toISOString().slice(0, 10);
+  const open = debts.filter((d) => d.status === "open");
+  const closed = debts.filter((d) => d.status === "closed");
+  const dueToday = open.filter((d) => d.dueDate && d.dueDate <= today);
+
+  return (
+    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
+        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><Wallet size={18} style={{ color: GOLD }} /> Qarz daftari</h1>
+      </div>
+
+      {dueToday.length > 0 && (
+        <div style={{ background: "rgba(178,58,58,0.15)", border: "1px solid #b23a3a" }} className="rounded-xl p-3 mb-4">
+          <div className="text-xs font-semibold mb-1" style={{ color: "#ff8a8a" }}>🔔 Bugun qaytarilishi kerak edi</div>
+          {dueToday.map((d) => (
+            <div key={d.id} className="text-xs" style={{ color: CREAM }}>{d.name} — {fmtMoney(d.amount - d.paidAmount)}</div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-2 mb-5">
+        <button onClick={() => setTab("open")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "open" ? GOLD : FELT, color: tab === "open" ? FELT_DARK : CREAM }}>Qarzdorlar ({open.length})</button>
+        <button onClick={() => setTab("closed")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "closed" ? GOLD : FELT, color: tab === "closed" ? FELT_DARK : CREAM }}>Yopilgan ({closed.length})</button>
+      </div>
+
+      {tab === "open" && (
+        <>
+          <button onClick={() => { setShowAdd(true); setName(""); setPhone(""); setAmount(""); setDebtDate(new Date().toISOString().slice(0, 10)); setDueDate(""); setNote(""); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full mb-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
+            <Plus size={16} /> Qarzdor qo'shish
+          </button>
+          {open.length === 0 ? (
+            <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Qarzdor yo'q</p>
+          ) : (
+            <div className="space-y-2">
+              {open.map((d) => {
+                const remaining = d.amount - d.paidAmount;
+                const overdue = d.dueDate && d.dueDate <= today;
+                return (
+                  <div key={d.id} style={{ background: FELT, border: `1px solid ${overdue ? "#b23a3a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-sm font-medium" style={{ color: CREAM }}>{d.name}</div>
+                      <div className="text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(remaining)}</div>
+                    </div>
+                    {d.phone && <div className="text-xs mb-0.5" style={{ color: "#b8c9bf" }}>📞 {d.phone}</div>}
+                    <div className="text-xs mb-1" style={{ color: "#b8c9bf" }}>
+                      {d.debtDate} dan{d.dueDate ? ` · qaytarish: ${d.dueDate}` : ""}{d.paidAmount > 0 ? ` · ${fmtMoney(d.paidAmount)} to'langan` : ""}
+                    </div>
+                    {d.note && <div className="text-xs mb-2" style={{ color: "#b8c9bf" }}>💬 {d.note}</div>}
+                    <button onClick={() => { setPayTarget(d); setPayAmount(""); }}
+                      className="w-full py-2 rounded-lg text-xs font-semibold" style={{ background: "#0e4a36", color: "#7fd99a", border: "1px solid #7fd99a" }}>
+                      Qarzni qoplash
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === "closed" && (
+        <div className="space-y-2">
+          {closed.length === 0 ? (
+            <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha yo'q</p>
+          ) : closed.map((d) => (
+            <div key={d.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14, opacity: 0.75 }} className="p-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium" style={{ color: CREAM }}>{d.name}</div>
+                <div className="text-xs" style={{ color: "#7fd99a" }}>✅ {fmtMoney(d.amount)} yopilgan</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showAdd && (
+        <Modal onClose={() => setShowAdd(false)}>
+          <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Qarzdor qo'shish</h2>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ismi" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefon raqami" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Qarz summasi" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <div className="mb-3">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Qarz sanasi</label>
+            <input type="date" value={debtDate} onChange={(e) => setDebtDate(e.target.value)} className="w-full px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          </div>
+          <div className="mb-3">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Qaytaradigan sana <span style={{ opacity: 0.5 }}>(ixtiyoriy)</span></label>
+            <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-full px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          </div>
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy)"
+            className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <button disabled={!name.trim() || !amount}
+            onClick={() => { onAddDebt(name.trim(), phone.trim(), amount, debtDate, dueDate, note.trim()); onToast(`✅ ${name} qo'shildi`); setShowAdd(false); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Qo'shish
+          </button>
+        </Modal>
+      )}
+
+      {payTarget && (
+        <Modal onClose={() => setPayTarget(null)}>
+          <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{payTarget.name}" qarzini qoplash</h2>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Qoldiq qarz: {fmtMoney(payTarget.amount - payTarget.paidAmount)}</p>
+          <button onClick={() => { onPayDebt(payTarget.id, null); onToast(`✅ Qarz to'liq yopildi`); setPayTarget(null); }}
+            style={{ background: "#0e4a36", color: "#7fd99a", border: "1px solid #7fd99a" }} className="w-full mb-3 py-3 rounded-xl font-semibold text-sm">
+            Umumiy qarzni to'liq yopish
+          </button>
+          <div className="flex items-center gap-2 mb-2">
+            <div className="flex-1 h-px" style={{ background: FELT_LIGHT }} />
+            <span className="text-xs" style={{ color: "#b8c9bf" }}>yoki</span>
+            <div className="flex-1 h-px" style={{ background: FELT_LIGHT }} />
+          </div>
+          <input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder="Qancha to'ladi (summasini kiriting)"
+            className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          {payAmount && (
+            <p className="text-xs mb-3" style={{ color: GOLD }}>
+              Qoladi: {fmtMoney(Math.max(0, (payTarget.amount - payTarget.paidAmount) - Number(payAmount)))}
+            </p>
+          )}
+          <button disabled={!payAmount || Number(payAmount) <= 0}
+            onClick={() => { onPayDebt(payTarget.id, payAmount); onToast(`✅ To'lov qabul qilindi`); setPayTarget(null); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Kiritish
+          </button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ---------------- HALL ----------------
-function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {
+function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editTableObj, setEditTableObj] = useState(null);
   const [tName, setTName] = useState(""); const [tRate, setTRate] = useState("");
@@ -1067,6 +1551,8 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
   const [noteTable, setNoteTable] = useState(null);
   const [noteText, setNoteText] = useState("");
   const [lapTable, setLapTable] = useState(null);
+  const [transferTable, setTransferTable] = useState(null);
+  const [transferDest, setTransferDest] = useState(null);
   const [lapComment, setLapComment] = useState("");
   const [justAdded, setJustAdded] = useState(null);
 
@@ -1183,16 +1669,21 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
                       </button>
                     </div>
                   )}
-                  <div className="flex gap-2">
-                    {playing ? (
-                      <>
-                        <button onClick={() => setActiveTable(t)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><ShoppingBasket size={13} /> Qo'shish</button>
-                        <button type="button" onClick={() => onPause && onPause(t.id)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: "#d19a4f", color: FELT_DARK }}>Pauza</button>
-                      </>
-                    ) : (
-                      <button type="button" onClick={() => onResume && onResume(t.id)} className="flex-1 py-2 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Davom ettirish</button>
+                  <div className="flex gap-2 mb-1.5">
+                    {playing && (
+                      <button onClick={() => setActiveTable(t)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><ShoppingBasket size={13} /> Qo'shish</button>
                     )}
-                    <button onClick={() => setConfirmClose(t)} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: RED, color: "#fff" }}>Yopish</button>
+                    <button type="button" onClick={() => { setTransferTable(t); setTransferDest(null); }} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: GOLD }}>
+                      <ArrowLeftRight size={13} /> O'tkazish
+                    </button>
+                  </div>
+                  <div className="flex gap-1.5">
+                    {playing ? (
+                      <button type="button" onClick={() => onPause && onPause(t.id)} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium" style={{ background: "#d19a4f", color: FELT_DARK }}>Pauza</button>
+                    ) : (
+                      <button type="button" onClick={() => onResume && onResume(t.id)} className="flex-1 py-1.5 rounded-lg text-[11px] font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Davom ettirish</button>
+                    )}
+                    <button onClick={() => setConfirmClose(t)} className="flex-1 py-1.5 rounded-lg text-[11px] font-medium" style={{ background: RED, color: "#fff" }}>Yopish</button>
                   </div>
                 </>
               ) : (
@@ -1284,7 +1775,7 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
           <div className="grid grid-cols-2 gap-2 mb-3 max-h-56 overflow-y-auto">
             {filteredBar.length === 0 && <p className="text-xs col-span-2 opacity-60" style={{ color: CREAM }}>Bar bo'sh. "Bar" bo'limidan mahsulot qo'shing.</p>}
             {filteredBar.map((e) => (
-              <button key={e.id} onClick={() => { onAddExtra(activeTable.id, { name: e.name, price: e.price }); onToast(`✅ ${e.name} qo'shildi`); setJustAdded(e.id); setTimeout(() => setJustAdded(null), 700); }}
+              <button key={e.id} onClick={() => { onAddExtra(activeTable.id, { name: e.name, price: e.price, barItemId: e.id }); onToast(`✅ ${e.name} qo'shildi`); setJustAdded(e.id); setTimeout(() => setJustAdded(null), 700); }}
                 style={{ background: justAdded === e.id ? "rgba(123,191,106,0.18)" : FELT_DARK, border: `1px solid ${justAdded === e.id ? "#7bbf6a" : FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: e.color }}
                 className="p-3 rounded-xl text-left flex items-center gap-2 relative transition-colors">
                 <span style={{ fontSize: 18 }}>{e.emoji}</span>
@@ -1340,6 +1831,43 @@ function HallScreen({ hall, bar, now, onBack, onCreateTable, onEditTable, onDele
             className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <button onClick={() => { onAddLap(lapTable.id, lapComment.trim()); setLapTable(null); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
             <Flag size={15} /> Znak qo'yish
+          </button>
+        </Modal>
+      )}
+
+      {transferTable && (
+        <Modal onClose={() => { setTransferTable(null); setTransferDest(null); }}>
+          <h2 className="font-display text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: CREAM }}><ArrowLeftRight size={17} /> "{transferTable.name}"ni ko'chirish</h2>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Hisoblagich, izoh va mahsulotlar shu bo'sh stolga o'tadi, "{transferTable.name}" esa bo'shab qoladi.</p>
+          <div className="max-h-64 overflow-y-auto mb-4 space-y-3">
+            {(allHalls || []).map((h) => {
+              const freeTables = h.tables.filter((t) => t.status === "free" && t.id !== transferTable.id);
+              if (freeTables.length === 0) return null;
+              return (
+                <div key={h.id}>
+                  <div className="text-[11px] font-semibold mb-1.5" style={{ color: "#b8c9bf" }}>{h.name}</div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {freeTables.map((t) => (
+                      <button key={t.id} onClick={() => setTransferDest({ hallId: h.id, tableId: t.id })}
+                        className="py-2 rounded-lg text-xs font-medium"
+                        style={{ background: transferDest && transferDest.tableId === t.id ? GOLD : FELT_DARK, color: transferDest && transferDest.tableId === t.id ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                        {t.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {(allHalls || []).every((h) => h.tables.filter((t) => t.status === "free" && t.id !== transferTable.id).length === 0) && (
+              <p className="text-sm text-center py-4" style={{ color: "#b8c9bf" }}>Hozircha bo'sh stol yo'q</p>
+            )}
+          </div>
+          <button disabled={!transferDest} onClick={() => {
+            onTransfer(transferTable.id, transferDest.hallId, transferDest.tableId);
+            onToast(`✅ "${transferTable.name}" ko'chirildi`);
+            setTransferTable(null); setTransferDest(null);
+          }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Ko'chirish
           </button>
         </Modal>
       )}
@@ -1542,7 +2070,7 @@ function SupportScreen({ messages, onSend, onBack }) {
 }
 
 // ---------------- ADMIN ----------------
-function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan, onDeletePlan, onAddPromo, onToggleSub, onToggleVip, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
+function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan, onDeletePlan, onAddPromo, onToggleSub, onToggleVip, onToggleBetaAccess, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
   const [tab, setTab] = useState("stats");
   const [code, setCode] = useState("");
   const [promoDays, setPromoDays] = useState("");
@@ -1655,6 +2183,9 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                   </button>
                   <button onClick={() => onToggleVip(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
                     {u.accountType === "vip" ? "Oddiyga o'tkazish" : "VIP qilish"}
+                  </button>
+                  <button onClick={() => onToggleBetaAccess(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: u.betaAccess ? "#0e4a36" : FELT_DARK, color: u.betaAccess ? "#7fd99a" : CREAM, border: `1px solid ${u.betaAccess ? "#7fd99a" : FELT_LIGHT}` }}>
+                    {u.betaAccess ? "Yangi funksiyalar: YOQIQ ✓" : "Yangi funksiyalarni berish"}
                   </button>
                   {u.banned ? (
                     <button onClick={() => onUnban(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: "#7bbf6a", border: `1px solid ${FELT_LIGHT}` }}>Banni bekor qilish</button>
