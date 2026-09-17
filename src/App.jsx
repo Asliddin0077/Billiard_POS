@@ -495,8 +495,8 @@ export default function BilliardPOS() {
     if (extra.barItemId && currentUser && currentUser.betaAccess) {
       const wi = warehouseItems.find((w) => w.barItemId === extra.barItemId);
       if (!wi || wi.units <= 0) {
-        showToast(`❌ Skladda "${extra.name}" qolmagan`);
-        return;
+        showToast(`❌ Skladda "${extra.name}" mavjud emas`);
+        return false;
       }
       await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
       await supabase.from("warehouse_items").update({ units_in_stock: wi.units - 1 }).eq("id", wi.id);
@@ -508,6 +508,7 @@ export default function BilliardPOS() {
       await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
     }
     await refreshOwnerData();
+    return true;
   }
   async function addStock(barItemId, name, blocks, unitsPerBlock, entryDate, note) {
     const units = (Number(blocks) || 0) * (Number(unitsPerBlock) || 0);
@@ -1775,7 +1776,7 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
           <div className="grid grid-cols-2 gap-2 mb-3 max-h-56 overflow-y-auto">
             {filteredBar.length === 0 && <p className="text-xs col-span-2 opacity-60" style={{ color: CREAM }}>Bar bo'sh. "Bar" bo'limidan mahsulot qo'shing.</p>}
             {filteredBar.map((e) => (
-              <button key={e.id} onClick={() => { onAddExtra(activeTable.id, { name: e.name, price: e.price, barItemId: e.id }); onToast(`✅ ${e.name} qo'shildi`); setJustAdded(e.id); setTimeout(() => setJustAdded(null), 700); }}
+              <button key={e.id} onClick={async () => { const ok = await onAddExtra(activeTable.id, { name: e.name, price: e.price, barItemId: e.id }); if (ok) { onToast(`✅ ${e.name} qo'shildi`); setJustAdded(e.id); setTimeout(() => setJustAdded(null), 700); } }}
                 style={{ background: justAdded === e.id ? "rgba(123,191,106,0.18)" : FELT_DARK, border: `1px solid ${justAdded === e.id ? "#7bbf6a" : FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: e.color }}
                 className="p-3 rounded-xl text-left flex items-center gap-2 relative transition-colors">
                 <span style={{ fontSize: 18 }}>{e.emoji}</span>
