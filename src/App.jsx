@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.1.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.1.1")
+const APP_VERSION = "1.2.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.2.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -136,17 +136,21 @@ function mapDebt(row) {
     debtDate: row.debt_date, dueDate: row.due_date, note: row.note || "", status: row.status,
     createdAt: new Date(row.created_at).getTime(), closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null };
 }
+function mapDebtPayment(row) {
+  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime() };
+}
 
 // ---------------- data fetch helpers ----------------
 async function fetchOwnerData(ownerId) {
-  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes] = await Promise.all([
-    supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at"),
+  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes] = await Promise.all([
+    supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" }),
     supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
     supabase.from("chats").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("warehouse_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("warehouse_logs").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }).limit(300),
     supabase.from("debts").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }),
+    supabase.from("debt_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
   ]);
   return {
     halls: (hallsRes.data || []).map(mapHall),
@@ -156,6 +160,7 @@ async function fetchOwnerData(ownerId) {
     warehouseItems: (whItemsRes.data || []).map(mapWarehouseItem),
     warehouseLogs: (whLogsRes.data || []).map(mapWarehouseLog),
     debts: (debtsRes.data || []).map(mapDebt),
+    debtPayments: (debtPayRes.data || []).map(mapDebtPayment),
   };
 }
 async function fetchAdminData() {
@@ -233,6 +238,7 @@ export default function BilliardPOS() {
   const [warehouseItems, setWarehouseItems] = useState([]);
   const [warehouseLogs, setWarehouseLogs] = useState([]);
   const [debts, setDebts] = useState([]);
+  const [debtPayments, setDebtPayments] = useState([]);
   const [history, setHistory] = useState([]);
   const [myChat, setMyChat] = useState([]);
 
@@ -276,7 +282,7 @@ export default function BilliardPOS() {
                 if (isBanned(u)) { setScreen("banned"); }
                 else {
                   const od = await fetchOwnerData(u.id);
-                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts);
+                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments);
                   setScreen(canAccess(u) ? "halls" : "subscribe");
                 }
               }
@@ -297,7 +303,7 @@ export default function BilliardPOS() {
       if (data && data.active_session_token && data.active_session_token !== sessionToken) {
         localStorage.removeItem(SESSION_KEY);
         setCurrentUser(null); setSessionToken(null);
-        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]);
+        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]);
         setScreen("auth");
         showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
       }
@@ -347,7 +353,7 @@ export default function BilliardPOS() {
 
   async function refreshOwnerData(ownerId) {
     const od = await fetchOwnerData(ownerId || currentUser.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments);
   }
   async function refreshMyChat() {
     const { data } = await supabase.from("chats").select("*").eq("owner_id", currentUser.id).order("created_at");
@@ -369,7 +375,7 @@ export default function BilliardPOS() {
     const token = crypto.randomUUID();
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     try { localStorage.setItem(`billiard-pos-newuser-${u.id}`, "1"); } catch (e) {}
-    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]);
+    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]);
     persistSession({ userId: u.id, isAdmin: false, token });
     setScreen("subscribe");
   }
@@ -414,14 +420,14 @@ export default function BilliardPOS() {
     persistSession({ userId: u.id, isAdmin: false, token });
     if (isBanned(u)) { setScreen("banned"); return; }
     const od = await fetchOwnerData(u.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments);
     setScreen(canAccess(u) ? "halls" : "subscribe");
   }
 
   function handleLogout() {
     persistSession({ userId: null, isAdmin: false });
     setCurrentUser(null); setSessionToken(null); setIsAdmin(false); setAdminLogin(null);
-    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]);
+    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]);
     setUsers([]); setPromoCodes([]); setAdminAccounts([]); setChatsByUser({});
     setActiveHallId(null); setScreen("auth");
   }
@@ -444,7 +450,12 @@ export default function BilliardPOS() {
   async function createHall(name) { await supabase.from("halls").insert({ owner_id: currentUser.id, name }); await refreshOwnerData(); }
   async function renameHall(hallId, name) { await supabase.from("halls").update({ name }).eq("id", hallId); await refreshOwnerData(); }
   async function deleteHall(hallId) { await supabase.from("halls").delete().eq("id", hallId); await refreshOwnerData(); }
-  async function createTable(hallId, name, rate) { await supabase.from("billiard_tables").insert({ hall_id: hallId, name, rate, status: "free" }); await refreshOwnerData(); }
+  async function createTable(hallId, name, rate) {
+    const hall = halls.find((h) => h.id === hallId);
+    const nextPos = hall ? hall.tables.length : 0;
+    await supabase.from("billiard_tables").insert({ hall_id: hallId, name, rate, status: "free", position: nextPos });
+    await refreshOwnerData();
+  }
   async function editTable(hallId, tableId, name, rate) { await supabase.from("billiard_tables").update({ name, rate }).eq("id", tableId); await refreshOwnerData(); }
   async function deleteTable(hallId, tableId) { await supabase.from("billiard_tables").delete().eq("id", tableId); await refreshOwnerData(); }
   async function startTable(hallId, tableId, targetSeconds, prepaidAmount) {
@@ -544,6 +555,21 @@ export default function BilliardPOS() {
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
+  async function sellDirect(warehouseItemId, quantity, note) {
+    const wi = warehouseItems.find((w) => w.id === warehouseItemId);
+    if (!wi) return;
+    const units = Number(quantity) || 0;
+    if (units <= 0) return;
+    if (units > wi.units) { showToast(`❌ Skladda faqat ${wi.units} dona bor`); return; }
+    const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units - units }).eq("id", wi.id);
+    if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
+    const r2 = await supabase.from("warehouse_logs").insert({
+      warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -units, type: "direct",
+      note: note || "", entry_date: new Date().toISOString().slice(0, 10),
+    });
+    if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
+    await refreshOwnerData();
+  }
   async function addDebt(name, phone, amount, debtDate, dueDate, note) {
     const r = await supabase.from("debts").insert({
       owner_id: currentUser.id, debtor_name: name, debtor_phone: phone || null, amount: Number(amount),
@@ -557,12 +583,15 @@ export default function BilliardPOS() {
     if (!d) return;
     const remaining = d.amount - d.paidAmount;
     const applied = payAmount == null ? remaining : Math.min(Number(payAmount), remaining);
+    if (applied <= 0) return;
     const newPaid = d.paidAmount + applied;
     const closed = newPaid >= d.amount;
     const r = await supabase.from("debts").update({
       paid_amount: newPaid, status: closed ? "closed" : "open", closed_at: closed ? new Date().toISOString() : null,
     }).eq("id", debtId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    const r2 = await supabase.from("debt_payments").insert({ debt_id: debtId, owner_id: currentUser.id, amount: applied });
+    if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
   async function updateTableNote(hallId, tableId, note) {
@@ -585,6 +614,7 @@ export default function BilliardPOS() {
   async function closeTable(hallId, tableId, record) {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
+    if (!table || table.status === "free") return; // allaqachon yopilgan — qayta yozmaymiz
     const rate = table ? table.rate : 0;
     const existingLaps = table ? table.laps : [];
     const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
@@ -801,13 +831,13 @@ export default function BilliardPOS() {
         <WarehouseScreen
           bar={bar} warehouseItems={warehouseItems} warehouseLogs={warehouseLogs}
           onBack={() => setScreen("halls")}
-          onAddStock={addStock} onRemoveStock={removeStock} onToast={showToast}
+          onAddStock={addStock} onRemoveStock={removeStock} onDirectSale={sellDirect} onToast={showToast}
         />
       )}
 
       {screen === "debts" && currentUser && currentUser.betaAccess && (
         <DebtsScreen
-          debts={debts} onBack={() => setScreen("halls")}
+          debts={debts} debtPayments={debtPayments} onBack={() => setScreen("halls")}
           onAddDebt={addDebt} onPayDebt={payDebt} onToast={showToast}
         />
       )}
@@ -1144,6 +1174,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
           <button disabled={!oldPass || newPass.length < 8}
             onClick={() => { onChangePassword(oldPass, newPass); setOldPass(""); setNewPass(""); setShowPass(false); }}
             style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">Saqlash</button>
+          <p className="text-center text-xs mt-4" style={{ color: "#8fa398" }}>Ilova versiyasi: {APP_VERSION}</p>
         </Modal>
       )}
 
@@ -1237,7 +1268,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
 }
 
 // ---------------- SKLAD ----------------
-function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStock, onRemoveStock, onToast }) {
+function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStock, onRemoveStock, onDirectSale, onToast }) {
   const [tab, setTab] = useState("stock"); // stock | report
   const [showAdd, setShowAdd] = useState(false);
   const [pickedBarItem, setPickedBarItem] = useState(null);
@@ -1249,6 +1280,9 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
   const [rmBlocks, setRmBlocks] = useState("");
   const [rmUnitsPerBlock, setRmUnitsPerBlock] = useState("1");
   const [rmNote, setRmNote] = useState("");
+  const [sellItem, setSellItem] = useState(null);
+  const [sellQty, setSellQty] = useState("");
+  const [sellNote, setSellNote] = useState("");
 
   function itemLog(id) { return warehouseLogs.filter((l) => l.warehouseItemId === id); }
 
@@ -1276,15 +1310,21 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
           ) : (
             <div className="space-y-2">
               {warehouseItems.map((w) => (
-                <div key={w.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 flex items-center justify-between">
+                <div key={w.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{w.name}</div>
                     <div className="text-xs" style={{ color: "#b8c9bf" }}>{w.units} dona qoldi</div>
                   </div>
-                  <button onClick={() => { setRemoveItem(w); setRmBlocks(""); setRmUnitsPerBlock("1"); setRmNote(""); }}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1" style={{ background: FELT_DARK, color: "#ff8a8a" }}>
-                    <Minus size={12} /> Ayirish
-                  </button>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button onClick={() => { setSellItem(w); setSellQty(""); setSellNote(""); }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1" style={{ background: "#0e4a36", color: "#7fd99a" }}>
+                      Sotish
+                    </button>
+                    <button onClick={() => { setRemoveItem(w); setRmBlocks(""); setRmUnitsPerBlock("1"); setRmNote(""); }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1" style={{ background: FELT_DARK, color: "#ff8a8a" }}>
+                      <Minus size={12} /> Ayirish
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1303,7 +1343,7 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
                 <div>
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{wi ? wi.name : "?"}</div>
                   <div className="text-[11px]" style={{ color: "#b8c9bf" }}>
-                    {l.entryDate} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : "sotildi"}{l.note ? ` · ${l.note}` : ""}
+                    {l.entryDate} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : "stolga sotildi"}{l.note ? ` · ${l.note}` : ""}
                   </div>
                 </div>
                 <div className="text-sm font-semibold" style={{ color: l.changeUnits > 0 ? "#7fd99a" : "#ff8a8a" }}>
@@ -1387,12 +1427,34 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
           </button>
         </Modal>
       )}
+
+      {sellItem && (
+        <Modal onClose={() => setSellItem(null)}>
+          <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{sellItem.name}" sotish</h2>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Stoldan tashqari — mijoz shunchaki sotib olganda. Hozir: {sellItem.units} dona</p>
+          <div className="mb-3">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha dona</label>
+            <input type="number" value={sellQty} onChange={(e) => setSellQty(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          </div>
+          <textarea value={sellNote} onChange={(e) => setSellNote(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy)"
+            className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <button disabled={!sellQty || Number(sellQty) <= 0}
+            onClick={() => {
+              onDirectSale(sellItem.id, sellQty, sellNote.trim());
+              onToast(`✅ ${sellItem.name} sotildi`);
+              setSellItem(null);
+            }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Sotish
+          </button>
+        </Modal>
+      )}
     </div>
   );
 }
 
 // ---------------- QARZ DAFTARI ----------------
-function DebtsScreen({ debts, onBack, onAddDebt, onPayDebt, onToast }) {
+function DebtsScreen({ debts, debtPayments, onBack, onAddDebt, onPayDebt, onToast }) {
   const [tab, setTab] = useState("open"); // open | closed
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
@@ -1443,6 +1505,7 @@ function DebtsScreen({ debts, onBack, onAddDebt, onPayDebt, onToast }) {
               {open.map((d) => {
                 const remaining = d.amount - d.paidAmount;
                 const overdue = d.dueDate && d.dueDate <= today;
+                const payments = (debtPayments || []).filter((p) => p.debtId === d.id);
                 return (
                   <div key={d.id} style={{ background: FELT, border: `1px solid ${overdue ? "#b23a3a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5">
                     <div className="flex items-center justify-between mb-1">
@@ -1454,6 +1517,15 @@ function DebtsScreen({ debts, onBack, onAddDebt, onPayDebt, onToast }) {
                       {d.debtDate} dan{d.dueDate ? ` · qaytarish: ${d.dueDate}` : ""}{d.paidAmount > 0 ? ` · ${fmtMoney(d.paidAmount)} to'langan` : ""}
                     </div>
                     {d.note && <div className="text-xs mb-2" style={{ color: "#b8c9bf" }}>💬 {d.note}</div>}
+                    {payments.length > 0 && (
+                      <div className="mb-2 pl-2 border-l-2 space-y-0.5" style={{ borderColor: FELT_LIGHT }}>
+                        {payments.map((p) => (
+                          <div key={p.id} className="text-[11px]" style={{ color: "#8fa398" }}>
+                            {fmtDate(p.paidAt)}, {new Date(p.paidAt).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" })} — {fmtMoney(p.amount)} to'landi
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <button onClick={() => { setPayTarget(d); setPayAmount(""); }}
                       className="w-full py-2 rounded-lg text-xs font-semibold" style={{ background: "#0e4a36", color: "#7fd99a", border: "1px solid #7fd99a" }}>
                       Qarzni qoplash
@@ -1470,14 +1542,27 @@ function DebtsScreen({ debts, onBack, onAddDebt, onPayDebt, onToast }) {
         <div className="space-y-2">
           {closed.length === 0 ? (
             <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha yo'q</p>
-          ) : closed.map((d) => (
-            <div key={d.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14, opacity: 0.75 }} className="p-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-medium" style={{ color: CREAM }}>{d.name}</div>
-                <div className="text-xs" style={{ color: "#7fd99a" }}>✅ {fmtMoney(d.amount)} yopilgan</div>
+          ) : closed.map((d) => {
+            const payments = (debtPayments || []).filter((p) => p.debtId === d.id);
+            return (
+              <div key={d.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14, opacity: 0.85 }} className="p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium" style={{ color: CREAM }}>{d.name}</div>
+                  <div className="text-xs" style={{ color: "#7fd99a" }}>✅ {fmtMoney(d.amount)} yopilgan</div>
+                </div>
+                {d.closedAt && <div className="text-[11px] mt-0.5" style={{ color: "#8fa398" }}>Yopilgan sana: {fmtDate(d.closedAt)}</div>}
+                {payments.length > 0 && (
+                  <div className="mt-1.5 pl-2 border-l-2 space-y-0.5" style={{ borderColor: FELT_LIGHT }}>
+                    {payments.map((p) => (
+                      <div key={p.id} className="text-[11px]" style={{ color: "#8fa398" }}>
+                        {fmtDate(p.paidAt)}, {new Date(p.paidAt).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" })} — {fmtMoney(p.amount)} to'landi
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1549,6 +1634,7 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
   const [alertedTables, setAlertedTables] = useState({});
   const [confirmClose, setConfirmClose] = useState(null);
   const [receipt, setReceipt] = useState(null);
+  const [closing, setClosing] = useState(false);
   const [noteTable, setNoteTable] = useState(null);
   const [noteText, setNoteText] = useState("");
   const [lapTable, setLapTable] = useState(null);
@@ -1878,11 +1964,14 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
           <ReceiptView title={`${hall.name} · ${receipt.table.name}`} start={receipt.startTime} end={receipt.endTime}
             duration={receipt.duration} tableCost={receipt.tableCost} extras={receipt.extras} extrasCost={receipt.extrasCost}
             laps={receipt.laps} generalNote={receipt.generalNote} />
-          <button onClick={() => {
-            onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost });
+          <button disabled={closing} onClick={async () => {
+            if (closing) return;
+            setClosing(true);
+            await onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost });
             setReceipt(null);
-          }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 mt-2">
-            <Check size={16} /> Tasdiqlash
+            setClosing(false);
+          }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 mt-2 disabled:opacity-50">
+            {closing ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} Tasdiqlash
           </button>
         </Modal>
       )}
