@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.1.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.2.1")
+const APP_VERSION = "1.3.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.3.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -139,10 +139,13 @@ function mapDebt(row) {
 function mapDebtPayment(row) {
   return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime() };
 }
+function mapDebtTopup(row) {
+  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), note: row.note || "", addedAt: new Date(row.added_at).getTime() };
+}
 
 // ---------------- data fetch helpers ----------------
 async function fetchOwnerData(ownerId) {
-  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes] = await Promise.all([
+  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes] = await Promise.all([
     supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" }),
     supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
@@ -151,6 +154,7 @@ async function fetchOwnerData(ownerId) {
     supabase.from("warehouse_logs").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }).limit(300),
     supabase.from("debts").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }),
     supabase.from("debt_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
+    supabase.from("debt_topups").select("*").eq("owner_id", ownerId).order("added_at", { ascending: false }),
   ]);
   return {
     halls: (hallsRes.data || []).map(mapHall),
@@ -161,6 +165,7 @@ async function fetchOwnerData(ownerId) {
     warehouseLogs: (whLogsRes.data || []).map(mapWarehouseLog),
     debts: (debtsRes.data || []).map(mapDebt),
     debtPayments: (debtPayRes.data || []).map(mapDebtPayment),
+    debtTopups: (debtTopupRes.data || []).map(mapDebtTopup),
   };
 }
 async function fetchAdminData() {
@@ -239,6 +244,7 @@ export default function BilliardPOS() {
   const [warehouseLogs, setWarehouseLogs] = useState([]);
   const [debts, setDebts] = useState([]);
   const [debtPayments, setDebtPayments] = useState([]);
+  const [debtTopups, setDebtTopups] = useState([]);
   const [history, setHistory] = useState([]);
   const [myChat, setMyChat] = useState([]);
 
@@ -282,7 +288,7 @@ export default function BilliardPOS() {
                 if (isBanned(u)) { setScreen("banned"); }
                 else {
                   const od = await fetchOwnerData(u.id);
-                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments);
+                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups);
                   setScreen(canAccess(u) ? "halls" : "subscribe");
                 }
               }
@@ -303,7 +309,7 @@ export default function BilliardPOS() {
       if (data && data.active_session_token && data.active_session_token !== sessionToken) {
         localStorage.removeItem(SESSION_KEY);
         setCurrentUser(null); setSessionToken(null);
-        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]);
+        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]);
         setScreen("auth");
         showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
       }
@@ -353,7 +359,7 @@ export default function BilliardPOS() {
 
   async function refreshOwnerData(ownerId) {
     const od = await fetchOwnerData(ownerId || currentUser.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups);
   }
   async function refreshMyChat() {
     const { data } = await supabase.from("chats").select("*").eq("owner_id", currentUser.id).order("created_at");
@@ -375,7 +381,7 @@ export default function BilliardPOS() {
     const token = crypto.randomUUID();
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     try { localStorage.setItem(`billiard-pos-newuser-${u.id}`, "1"); } catch (e) {}
-    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]);
+    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]);
     persistSession({ userId: u.id, isAdmin: false, token });
     setScreen("subscribe");
   }
@@ -420,14 +426,14 @@ export default function BilliardPOS() {
     persistSession({ userId: u.id, isAdmin: false, token });
     if (isBanned(u)) { setScreen("banned"); return; }
     const od = await fetchOwnerData(u.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups);
     setScreen(canAccess(u) ? "halls" : "subscribe");
   }
 
   function handleLogout() {
     persistSession({ userId: null, isAdmin: false });
     setCurrentUser(null); setSessionToken(null); setIsAdmin(false); setAdminLogin(null);
-    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]);
+    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]);
     setUsers([]); setPromoCodes([]); setAdminAccounts([]); setChatsByUser({});
     setActiveHallId(null); setScreen("auth");
   }
@@ -502,6 +508,16 @@ export default function BilliardPOS() {
     }).eq("id", sourceTableId);
     await refreshOwnerData();
   }
+  async function addExtraTime(hallId, tableId, minutes) {
+    const hall = halls.find((h) => h.id === hallId);
+    const table = hall && hall.tables.find((t) => t.id === tableId);
+    if (!table || !table.startTime) return;
+    const mins = Number(minutes) || 0;
+    if (mins <= 0) return;
+    const newStart = table.startTime - mins * 60000;
+    await supabase.from("billiard_tables").update({ start_time: new Date(newStart).toISOString() }).eq("id", tableId);
+    await refreshOwnerData();
+  }
   async function addExtra(hallId, tableId, extra) {
     if (extra.barItemId && currentUser && currentUser.betaAccess) {
       const wi = warehouseItems.find((w) => w.barItemId === extra.barItemId);
@@ -520,6 +536,29 @@ export default function BilliardPOS() {
     }
     await refreshOwnerData();
     return true;
+  }
+  async function addExtrasBatch(hallId, tableId, items) {
+    for (const item of items) {
+      if (!item || item.qty <= 0) continue;
+      if (item.barItemId && currentUser && currentUser.betaAccess) {
+        const wi = warehouseItems.find((w) => w.barItemId === item.barItemId);
+        if (!wi || wi.units < item.qty) {
+          showToast(`❌ Skladda "${item.name}" yetarli emas (${wi ? wi.units : 0} dona bor)`);
+          continue;
+        }
+        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price }));
+        await supabase.from("table_extras").insert(rows);
+        await supabase.from("warehouse_items").update({ units_in_stock: wi.units - item.qty }).eq("id", wi.id);
+        await supabase.from("warehouse_logs").insert({
+          warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -item.qty, type: "sale",
+          note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
+        });
+      } else {
+        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price }));
+        await supabase.from("table_extras").insert(rows);
+      }
+    }
+    await refreshOwnerData();
   }
   async function addStock(barItemId, name, blocks, unitsPerBlock, entryDate, note) {
     const units = (Number(blocks) || 0) * (Number(unitsPerBlock) || 0);
@@ -591,6 +630,20 @@ export default function BilliardPOS() {
     }).eq("id", debtId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     const r2 = await supabase.from("debt_payments").insert({ debt_id: debtId, owner_id: currentUser.id, amount: applied });
+    if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
+    await refreshOwnerData();
+  }
+  async function addToDebt(debtId, amount, note) {
+    const d = debts.find((x) => x.id === debtId);
+    if (!d) return;
+    const add = Number(amount) || 0;
+    if (add <= 0) return;
+    const newAmount = d.amount + add;
+    const r = await supabase.from("debts").update({
+      amount: newAmount, status: "open", closed_at: null,
+    }).eq("id", debtId);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    const r2 = await supabase.from("debt_topups").insert({ debt_id: debtId, owner_id: currentUser.id, amount: add, note: note || null });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
@@ -837,8 +890,8 @@ export default function BilliardPOS() {
 
       {screen === "debts" && currentUser && currentUser.betaAccess && (
         <DebtsScreen
-          debts={debts} debtPayments={debtPayments} onBack={() => setScreen("halls")}
-          onAddDebt={addDebt} onPayDebt={payDebt} onToast={showToast}
+          debts={debts} debtPayments={debtPayments} debtTopups={debtTopups} onBack={() => setScreen("halls")}
+          onAddDebt={addDebt} onPayDebt={payDebt} onAddToDebt={addToDebt} onToast={showToast}
         />
       )}
 
@@ -853,7 +906,8 @@ export default function BilliardPOS() {
           onPause={(tid) => pauseTable(activeHallId, tid)}
           onResume={(tid) => resumeTable(activeHallId, tid)}
           onTransfer={(tid, destHallId, destTableId) => transferTable(activeHallId, tid, destHallId, destTableId)}
-          onAddExtra={(tid, extra) => addExtra(activeHallId, tid, extra)}
+          onAddExtrasBatch={(tid, items) => addExtrasBatch(activeHallId, tid, items)}
+          onAddExtraTime={(tid, minutes) => addExtraTime(activeHallId, tid, minutes)}
           onClose={(tid, record) => closeTable(activeHallId, tid, record)}
           onUpdateNote={(tid, note) => updateTableNote(activeHallId, tid, note)}
           onAddLap={(tid, comment) => addLap(activeHallId, tid, comment)}
@@ -1454,7 +1508,7 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
 }
 
 // ---------------- QARZ DAFTARI ----------------
-function DebtsScreen({ debts, debtPayments, onBack, onAddDebt, onPayDebt, onToast }) {
+function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPayDebt, onAddToDebt, onToast }) {
   const [tab, setTab] = useState("open"); // open | closed
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
@@ -1465,6 +1519,9 @@ function DebtsScreen({ debts, debtPayments, onBack, onAddDebt, onPayDebt, onToas
   const [note, setNote] = useState("");
   const [payTarget, setPayTarget] = useState(null);
   const [payAmount, setPayAmount] = useState("");
+  const [topupTarget, setTopupTarget] = useState(null);
+  const [topupAmount, setTopupAmount] = useState("");
+  const [topupNote, setTopupNote] = useState("");
 
   const today = new Date().toISOString().slice(0, 10);
   const open = debts.filter((d) => d.status === "open");
@@ -1506,6 +1563,11 @@ function DebtsScreen({ debts, debtPayments, onBack, onAddDebt, onPayDebt, onToas
                 const remaining = d.amount - d.paidAmount;
                 const overdue = d.dueDate && d.dueDate <= today;
                 const payments = (debtPayments || []).filter((p) => p.debtId === d.id);
+                const topups = (debtTopups || []).filter((t) => t.debtId === d.id);
+                const timeline = [
+                  ...payments.map((p) => ({ id: `p-${p.id}`, at: p.paidAt, text: `− ${fmtMoney(p.amount)} to'landi` })),
+                  ...topups.map((t) => ({ id: `t-${t.id}`, at: t.addedAt, text: `+ ${fmtMoney(t.amount)} qarz qo'shildi${t.note ? ` (${t.note})` : ""}` })),
+                ].sort((a, b) => a.at - b.at);
                 return (
                   <div key={d.id} style={{ background: FELT, border: `1px solid ${overdue ? "#b23a3a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5">
                     <div className="flex items-center justify-between mb-1">
@@ -1514,22 +1576,28 @@ function DebtsScreen({ debts, debtPayments, onBack, onAddDebt, onPayDebt, onToas
                     </div>
                     {d.phone && <div className="text-xs mb-0.5" style={{ color: "#b8c9bf" }}>📞 {d.phone}</div>}
                     <div className="text-xs mb-1" style={{ color: "#b8c9bf" }}>
-                      {d.debtDate} dan{d.dueDate ? ` · qaytarish: ${d.dueDate}` : ""}{d.paidAmount > 0 ? ` · ${fmtMoney(d.paidAmount)} to'langan` : ""}
+                      {d.debtDate} dan{d.dueDate ? ` · qaytarish: ${d.dueDate}` : ""} · jami: {fmtMoney(d.amount)}{d.paidAmount > 0 ? ` · ${fmtMoney(d.paidAmount)} to'langan` : ""}
                     </div>
                     {d.note && <div className="text-xs mb-2" style={{ color: "#b8c9bf" }}>💬 {d.note}</div>}
-                    {payments.length > 0 && (
+                    {timeline.length > 0 && (
                       <div className="mb-2 pl-2 border-l-2 space-y-0.5" style={{ borderColor: FELT_LIGHT }}>
-                        {payments.map((p) => (
-                          <div key={p.id} className="text-[11px]" style={{ color: "#8fa398" }}>
-                            {fmtDate(p.paidAt)}, {new Date(p.paidAt).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" })} — {fmtMoney(p.amount)} to'landi
+                        {timeline.map((item) => (
+                          <div key={item.id} className="text-[11px]" style={{ color: "#8fa398" }}>
+                            {fmtDate(item.at)}, {new Date(item.at).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" })} — {item.text}
                           </div>
                         ))}
                       </div>
                     )}
-                    <button onClick={() => { setPayTarget(d); setPayAmount(""); }}
-                      className="w-full py-2 rounded-lg text-xs font-semibold" style={{ background: "#0e4a36", color: "#7fd99a", border: "1px solid #7fd99a" }}>
-                      Qarzni qoplash
-                    </button>
+                    <div className="flex gap-2">
+                      <button onClick={() => { setTopupTarget(d); setTopupAmount(""); setTopupNote(""); }}
+                        className="flex-1 py-2 rounded-lg text-xs font-semibold" style={{ background: FELT_DARK, color: GOLD, border: `1px solid ${FELT_LIGHT}` }}>
+                        + Qarz qo'shish
+                      </button>
+                      <button onClick={() => { setPayTarget(d); setPayAmount(""); }}
+                        className="flex-1 py-2 rounded-lg text-xs font-semibold" style={{ background: "#0e4a36", color: "#7fd99a", border: "1px solid #7fd99a" }}>
+                        Qarzni qoplash
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -1590,6 +1658,22 @@ function DebtsScreen({ debts, debtPayments, onBack, onAddDebt, onPayDebt, onToas
         </Modal>
       )}
 
+      {topupTarget && (
+        <Modal onClose={() => setTopupTarget(null)}>
+          <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{topupTarget.name}"ga qarz qo'shish</h2>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Yangi qarzdor yaratmasdan, hozirgi qarziga ustiga qo'shiladi. Hozirgi qoldiq: {fmtMoney(topupTarget.amount - topupTarget.paidAmount)}</p>
+          <input type="number" value={topupAmount} onChange={(e) => setTopupAmount(e.target.value)} placeholder="Qancha qarz bo'ldi"
+            className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <textarea value={topupNote} onChange={(e) => setTopupNote(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy)"
+            className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <button disabled={!topupAmount || Number(topupAmount) <= 0}
+            onClick={() => { onAddToDebt(topupTarget.id, topupAmount, topupNote.trim()); onToast(`✅ Qarzga qo'shildi`); setTopupTarget(null); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Qo'shish
+          </button>
+        </Modal>
+      )}
+
       {payTarget && (
         <Modal onClose={() => setPayTarget(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{payTarget.name}" qarzini qoplash</h2>
@@ -1622,7 +1706,7 @@ function DebtsScreen({ debts, debtPayments, onBack, onAddDebt, onPayDebt, onToas
 }
 
 // ---------------- HALL ----------------
-function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtra, onClose, onUpdateNote, onAddLap, onToast }) {
+function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtrasBatch, onAddExtraTime, onClose, onUpdateNote, onAddLap, onToast }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editTableObj, setEditTableObj] = useState(null);
   const [tName, setTName] = useState(""); const [tRate, setTRate] = useState("");
@@ -1642,6 +1726,10 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
   const [transferDest, setTransferDest] = useState(null);
   const [lapComment, setLapComment] = useState("");
   const [justAdded, setJustAdded] = useState(null);
+  const [cart, setCart] = useState({});
+  const [addingCart, setAddingCart] = useState(false);
+  const [extraTimeTable, setExtraTimeTable] = useState(null);
+  const [extraMinutes, setExtraMinutes] = useState("");
 
   function playAlertSound() {
     try {
@@ -1722,8 +1810,14 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
 
               {playing || paused ? (
                 <>
-                  <div className="font-mono text-lg font-semibold mb-0.5" style={{ color: paused ? "#d19a4f" : GOLD }}>
-                    {fmtDuration(elapsedSeconds(t))} {paused && <span className="text-xs font-sans opacity-70">(pauzada)</span>}
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <div className="font-mono text-lg font-semibold" style={{ color: paused ? "#d19a4f" : GOLD }}>
+                      {fmtDuration(elapsedSeconds(t))} {paused && <span className="text-xs font-sans opacity-70">(pauzada)</span>}
+                    </div>
+                    <button type="button" onClick={() => { setExtraTimeTable(t); setExtraMinutes(""); }} title="Qo'shimcha vaqt qo'shish"
+                      className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "#b8c9bf" }}>
+                      <Plus size={11} />
+                    </button>
                   </div>
                   {playing && t.targetSeconds && (
                     (() => {
@@ -1852,29 +1946,69 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
       )}
 
       {activeTable && (
-        <Modal onClose={() => { setActiveTable(null); setSearch(""); }}>
+        <Modal onClose={() => { setActiveTable(null); setSearch(""); setCart({}); }}>
           <h2 className="font-display text-lg font-semibold mb-3" style={{ color: CREAM }}>{activeTable.name} — mahsulot qo'shish</h2>
           <div className="relative mb-3">
             <Search size={14} style={{ color: "#8fa398" }} className="absolute left-3 top-1/2 -translate-y-1/2" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Qidirish..."
               className="w-full pl-9 pr-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
-          <div className="grid grid-cols-2 gap-2 mb-3 max-h-56 overflow-y-auto">
+          <div className="grid grid-cols-2 gap-2 mb-3 max-h-72 overflow-y-auto">
             {filteredBar.length === 0 && <p className="text-xs col-span-2 opacity-60" style={{ color: CREAM }}>Bar bo'sh. "Bar" bo'limidan mahsulot qo'shing.</p>}
-            {filteredBar.map((e) => (
-              <button key={e.id} onClick={async () => { const ok = await onAddExtra(activeTable.id, { name: e.name, price: e.price, barItemId: e.id }); if (ok) { onToast(`✅ ${e.name} qo'shildi`); setJustAdded(e.id); setTimeout(() => setJustAdded(null), 700); } }}
-                style={{ background: justAdded === e.id ? "rgba(123,191,106,0.18)" : FELT_DARK, border: `1px solid ${justAdded === e.id ? "#7bbf6a" : FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: e.color }}
-                className="p-3 rounded-xl text-left flex items-center gap-2 relative transition-colors">
-                <span style={{ fontSize: 18 }}>{e.emoji}</span>
-                <div>
-                  <div className="text-sm font-medium" style={{ color: CREAM }}>{e.name}</div>
-                  <div className="text-xs font-mono" style={{ color: e.color }}>{fmtMoney(e.price)}</div>
+            {filteredBar.map((e) => {
+              const qty = cart[e.id] || 0;
+              return (
+                <div key={e.id}
+                  style={{ background: qty > 0 ? "rgba(123,191,106,0.12)" : FELT_DARK, border: `1px solid ${qty > 0 ? "#7bbf6a" : FELT_LIGHT}`, borderLeftWidth: 4, borderLeftColor: e.color }}
+                  className="p-3 rounded-xl flex flex-col gap-2 transition-colors">
+                  <div className="flex items-center gap-2">
+                    <span style={{ fontSize: 18 }}>{e.emoji}</span>
+                    <div>
+                      <div className="text-sm font-medium" style={{ color: CREAM }}>{e.name}</div>
+                      <div className="text-xs font-mono" style={{ color: e.color }}>{fmtMoney(e.price)}</div>
+                    </div>
+                  </div>
+                  {qty === 0 ? (
+                    <button onClick={() => setCart((c) => ({ ...c, [e.id]: 1 }))}
+                      className="w-full py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1" style={{ background: GOLD, color: FELT_DARK }}>
+                      <Plus size={13} /> Qo'shish
+                    </button>
+                  ) : (
+                    <div className="flex items-center justify-between gap-1">
+                      <button onClick={() => setCart((c) => { const n = { ...c }; if (n[e.id] <= 1) delete n[e.id]; else n[e.id] -= 1; return n; })}
+                        className="w-8 h-8 rounded-lg flex items-center justify-center font-bold" style={{ background: FELT_LIGHT, color: CREAM }}>−</button>
+                      <span className="text-sm font-semibold flex-1 text-center" style={{ color: CREAM }}>{qty}</span>
+                      <button onClick={() => setCart((c) => ({ ...c, [e.id]: (c[e.id] || 0) + 1 }))}
+                        className="w-8 h-8 rounded-lg flex items-center justify-center font-bold" style={{ background: FELT_LIGHT, color: CREAM }}>+</button>
+                    </div>
+                  )}
                 </div>
-                {justAdded === e.id && <Check size={16} className="absolute top-2 right-2" style={{ color: "#7bbf6a" }} />}
-              </button>
-            ))}
+              );
+            })}
           </div>
-          <button onClick={() => { setActiveTable(null); setSearch(""); }} className="w-full py-3 rounded-xl text-sm" style={{ background: FELT_DARK, color: CREAM }}>Yopish</button>
+          {Object.keys(cart).length > 0 && (
+            <div className="flex justify-between items-baseline mb-3 px-1">
+              <span className="text-xs" style={{ color: "#b8c9bf" }}>Jami: {Object.values(cart).reduce((s, q) => s + q, 0)} ta mahsulot</span>
+              <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>
+                {fmtMoney(bar.reduce((s, b) => s + (cart[b.id] || 0) * b.price, 0))}
+              </span>
+            </div>
+          )}
+          <button disabled={Object.keys(cart).length === 0 || addingCart}
+            onClick={async () => {
+              setAddingCart(true);
+              const items = Object.entries(cart).map(([id, qty]) => {
+                const b = bar.find((x) => x.id === id);
+                return b ? { barItemId: b.id, name: b.name, price: b.price, qty } : null;
+              }).filter(Boolean);
+              await onAddExtrasBatch(activeTable.id, items);
+              setAddingCart(false);
+              setActiveTable(null); setSearch(""); setCart({});
+              onToast(`✅ Mahsulotlar qo'shildi`);
+            }}
+            className="w-full py-3 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40" style={{ background: GOLD, color: FELT_DARK }}>
+            {addingCart ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} OK
+          </button>
         </Modal>
       )}
 
@@ -1918,6 +2052,23 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
             className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <button onClick={() => { onAddLap(lapTable.id, lapComment.trim()); setLapTable(null); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
             <Flag size={15} /> Znak qo'yish
+          </button>
+        </Modal>
+      )}
+
+      {extraTimeTable && (
+        <Modal onClose={() => setExtraTimeTable(null)}>
+          <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{extraTimeTable.name}"ga vaqt qo'shish</h2>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Masalan band bo'lib vaqtida ochishga ulgurmagan bo'lsangiz — necha daqiqa o'tganini kiriting, hisoblagichga shuncha qo'shiladi.</p>
+          <div className="mb-4">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha daqiqa qo'shilsin</label>
+            <input type="number" value={extraMinutes} onChange={(e) => setExtraMinutes(e.target.value)} placeholder="masalan 15"
+              className="w-full px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          </div>
+          <button disabled={!extraMinutes || Number(extraMinutes) <= 0}
+            onClick={() => { onAddExtraTime(extraTimeTable.id, extraMinutes); onToast(`✅ ${extraMinutes} daqiqa qo'shildi`); setExtraTimeTable(null); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Qo'shish
           </button>
         </Modal>
       )}
