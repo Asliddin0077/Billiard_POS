@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.4.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.4.1")
+const APP_VERSION = "1.4.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.4.2")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -307,8 +307,9 @@ export default function BilliardPOS() {
                 showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
               } else {
                 const u = mapUser(data);
-                setCurrentUser(u); setSessionToken(s.token || null);
                 const accessUser = await resolveAccessUser(u);
+                setCurrentUser(u.role === "staff" ? { ...u, betaAccess: accessUser.betaAccess } : u);
+                setSessionToken(s.token || null);
                 if (isBanned(accessUser)) { setScreen("banned"); }
                 else {
                   const od = await fetchOwnerData(ownerIdOf(u));
@@ -449,6 +450,7 @@ export default function BilliardPOS() {
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     persistSession({ userId: u.id, isAdmin: false, token });
     const accessUser = await resolveAccessUser(u);
+    if (u.role === "staff") setCurrentUser({ ...u, betaAccess: accessUser.betaAccess });
     if (isBanned(accessUser)) { setScreen("banned"); return; }
     const od = await fetchOwnerData(ownerIdOf(u));
     setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments);
@@ -826,7 +828,10 @@ export default function BilliardPOS() {
     if (!name.trim() || !login.trim() || password.length < 8) { showToast("Barcha maydonlarni to'g'ri to'ldiring (parol kamida 8 belgi)"); return; }
     const normPhone = normalizePhone(phone) || phone.trim();
     const { error } = await supabase.rpc("register_staff", { p_owner_id: currentUser.id, p_name: name.trim(), p_phone: normPhone, p_login: login.trim(), p_password: password });
-    if (error) { showToast(error.message.includes("LOGIN_TAKEN") ? "Bu login band" : "Xatolik yuz berdi"); return; }
+    if (error) {
+      showToast(error.message.includes("LOGIN_TAKEN") ? "Bu login band" : `❌ ${error.message}`);
+      return;
+    }
     showToast(`✅ ${name} uchun akaunt yaratildi`);
     await refreshOwnerData();
   }
@@ -1386,26 +1391,28 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
 
       {tab === "bar" && (
         <div>
-          <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
-            <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi mahsulot qo'shish</div>
-            <div className="flex gap-2 mb-2">
-              <input value={menuName} onChange={(e) => setMenuName(e.target.value)} placeholder="Nomi, masalan Kola"
-                className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-              <input value={menuPrice} onChange={(e) => setMenuPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Sotish narxi"
-                className="w-28 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-            </div>
-            {user.role === "owner" && (
+          {user.role === "owner" ? (
+            <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
+              <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi mahsulot qo'shish</div>
+              <div className="flex gap-2 mb-2">
+                <input value={menuName} onChange={(e) => setMenuName(e.target.value)} placeholder="Nomi, masalan Kola"
+                  className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+                <input value={menuPrice} onChange={(e) => setMenuPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Sotish narxi"
+                  className="w-28 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+              </div>
               <div className="flex gap-2 mb-2">
                 <input value={menuCost} onChange={(e) => setMenuCost(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Tannarx (ixtiyoriy)"
                   className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
               </div>
-            )}
-            <button disabled={!menuName.trim() || !menuPrice}
-              onClick={() => { onAddMenuItem(menuName.trim(), Number(menuPrice), Number(menuCost) || 0); setMenuName(""); setMenuPrice(""); setMenuCost(""); }}
-              style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">
-              Qo'shish
-            </button>
-          </div>
+              <button disabled={!menuName.trim() || !menuPrice}
+                onClick={() => { onAddMenuItem(menuName.trim(), Number(menuPrice), Number(menuCost) || 0); setMenuName(""); setMenuPrice(""); setMenuCost(""); }}
+                style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">
+                Qo'shish
+              </button>
+            </div>
+          ) : (
+            <p className="text-xs mb-4" style={{ color: "#8fa398" }}>Narx va tannarxni faqat boshliq o'zgartira oladi.</p>
+          )}
           <div className="grid grid-cols-2 gap-2">
             {bar.length === 0 && <p className="text-sm opacity-50 col-span-2" style={{ color: CREAM }}>Hali mahsulot yo'q</p>}
             {bar.map((item) => (
@@ -1428,7 +1435,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
                     )}
                   </div>
                 </div>
-                <button onClick={() => onDeleteMenuItem(item.id)}><Trash2 size={14} style={{ color: RED }} /></button>
+                {user.role === "owner" && <button onClick={() => onDeleteMenuItem(item.id)}><Trash2 size={14} style={{ color: RED }} /></button>}
               </div>
             ))}
           </div>
@@ -2698,8 +2705,9 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
             </button>
           )}
           {users.length === 0 && <p className="text-sm opacity-50" style={{ color: CREAM }}>Hali foydalanuvchi yo'q</p>}
-          {users.map((u) => {
+          {users.filter((u) => u.role !== "staff").map((u) => {
             const unread = (chats[u.id] || []).some((m) => m.from === "user" && !m.readByAdmin);
+            const myStaff = users.filter((s) => s.role === "staff" && s.parentOwnerId === u.id);
             return (
               <div key={u.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4">
                 <div className="flex items-center justify-between mb-1">
@@ -2718,6 +2726,19 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                 </div>
                 <div className="text-xs font-mono mb-1" style={{ color: "#8fa398" }}>{u.phone} · @{u.login}</div>
                 <div className="text-xs mb-1" style={{ color: "#8fa398" }}>Ro'yxatdan o'tgan: {fmtDate(u.createdAt)}</div>
+                {myStaff.length > 0 && (
+                  <div className="mb-3 pl-3 border-l-2 space-y-1" style={{ borderColor: GOLD }}>
+                    <div className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}><Users size={11} /> Ishchilari ({myStaff.length}):</div>
+                    {myStaff.map((s) => (
+                      <div key={s.id} className="flex items-center justify-between text-xs" style={{ color: "#b8c9bf" }}>
+                        <span>👤 {s.name} · @{s.login}</span>
+                        <button onClick={() => { if (confirm(`"${s.name}" ishchisini o'chirasizmi?`)) onDeleteUser(s.id); }}>
+                          <Trash2 size={12} style={{ color: RED }} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {u.subscribed && u.subscriptionUntil && u.accountType !== "vip" && (
                   <div className="text-xs mb-3" style={{ color: u.subscriptionUntil > Date.now() ? "#7bbf6a" : "#e88" }}>
                     Obuna: {u.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(u.subscriptionUntil)} gacha
