@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.4.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.4.2")
+const APP_VERSION = "1.5.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.5.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -26,6 +26,17 @@ function fmtDuration(sec) {
 }
 function fmtTime(ts) { return new Date(ts).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" }); }
 function fmtDate(ts) { return new Date(ts).toLocaleDateString("uz-UZ", { day: "2-digit", month: "2-digit", year: "numeric" }); }
+function downloadCSV(filename, headers, rows) {
+  const esc = (v) => { const s = String(v == null ? "" : v); return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = [headers.map(esc).join(";"), ...rows.map((r) => r.map(esc).join(";"))];
+  const csv = "\uFEFF" + lines.join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 function normalizePhone(raw) {
   const d = (raw || "").replace(/[^\d+]/g, "");
   if (/^\+998\d{9}$/.test(d)) return d;
@@ -126,40 +137,48 @@ function mapHistory(row) {
     extrasCost: Number(row.extras_cost), total: Number(row.total),
     laps: (row.laps || []).map((l) => ({ ...l, cost: Number(l.cost || 0) })),
     generalNote: row.general_note || "",
+    actorName: row.actor_name || "", paymentMethod: row.payment_method || "",
   };
 }
 function mapPromo(row) { return { code: row.code, durationDays: row.duration_days || 30, used: row.used, usedBy: row.used_by }; }
 function mapChat(row) { return { id: row.id, ownerId: row.owner_id, from: row.from_role, text: row.message, broadcast: row.broadcast, readByAdmin: row.read_by_admin, readByUser: row.read_by_user, ts: new Date(row.created_at).getTime() }; }
 function mapAdmin(row) { return { login: row.login, name: row.name, createdAt: new Date(row.created_at).getTime() }; }
 function mapPlan(row) { return { id: row.id, label: row.label, months: Number(row.months), days: row.days, price: Number(row.price), active: row.active }; }
-function mapWarehouseItem(row) { return { id: row.id, barItemId: row.bar_item_id, name: row.name, units: Number(row.units_in_stock || 0) }; }
+function mapWarehouseItem(row) { return { id: row.id, barItemId: row.bar_item_id, name: row.name, units: Number(row.units_in_stock || 0), lowStockThreshold: Number(row.low_stock_threshold != null ? row.low_stock_threshold : 5) }; }
 function mapWarehouseLog(row) {
   return { id: row.id, warehouseItemId: row.warehouse_item_id, changeUnits: Number(row.change_units), type: row.type,
     blocks: row.blocks != null ? Number(row.blocks) : null, unitsPerBlock: row.units_per_block != null ? Number(row.units_per_block) : null,
     costPrice: row.cost_price != null ? Number(row.cost_price) : null, sellPrice: row.sell_price != null ? Number(row.sell_price) : null,
-    note: row.note || "", entryDate: row.entry_date, createdAt: new Date(row.created_at).getTime() };
+    note: row.note || "", entryDate: row.entry_date, createdAt: new Date(row.created_at).getTime(),
+    actorName: row.actor_name || "", paymentMethod: row.payment_method || "" };
 }
 function mapDebt(row) {
   return { id: row.id, name: row.debtor_name, phone: row.debtor_phone || "", amount: Number(row.amount), paidAmount: Number(row.paid_amount || 0),
     debtDate: row.debt_date, dueDate: row.due_date, note: row.note || "", status: row.status,
-    createdAt: new Date(row.created_at).getTime(), closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null };
+    createdAt: new Date(row.created_at).getTime(), closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null,
+    actorName: row.actor_name || "" };
 }
 function mapDebtPayment(row) {
-  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime() };
+  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime(),
+    actorName: row.actor_name || "", paymentMethod: row.payment_method || "" };
 }
 function mapDebtTopup(row) {
-  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), note: row.note || "", addedAt: new Date(row.added_at).getTime() };
+  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), note: row.note || "", addedAt: new Date(row.added_at).getTime(), actorName: row.actor_name || "" };
 }
 function mapStaffSalary(row) {
   return { id: row.id, staffId: row.staff_id, amount: Number(row.amount), payDay: Number(row.pay_day) };
 }
 function mapSalaryPayment(row) {
-  return { id: row.id, salaryId: row.salary_id, staffId: row.staff_id, period: row.period, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime() };
+  return { id: row.id, salaryId: row.salary_id, staffId: row.staff_id, period: row.period, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime(), actorName: row.actor_name || "" };
+}
+function mapShift(row) {
+  return { id: row.id, openedBy: row.opened_by, openedByName: row.opened_by_name, openedAt: new Date(row.opened_at).getTime(),
+    closedBy: row.closed_by, closedByName: row.closed_by_name, closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null, status: row.status };
 }
 
 // ---------------- data fetch helpers ----------------
 async function fetchOwnerData(ownerId) {
-  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes, staffRes, salariesRes, salaryPayRes] = await Promise.all([
+  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes, staffRes, salariesRes, salaryPayRes, shiftsRes] = await Promise.all([
     supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" }),
     supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
@@ -172,6 +191,7 @@ async function fetchOwnerData(ownerId) {
     supabase.from("users").select("*").eq("parent_owner_id", ownerId).eq("role", "staff").order("created_at"),
     supabase.from("staff_salaries").select("*").eq("owner_id", ownerId),
     supabase.from("salary_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
+    supabase.from("shifts").select("*").eq("owner_id", ownerId).order("opened_at", { ascending: false }).limit(60),
   ]);
   return {
     halls: (hallsRes.data || []).map(mapHall),
@@ -186,6 +206,7 @@ async function fetchOwnerData(ownerId) {
     staffList: (staffRes.data || []).map(mapUser),
     staffSalaries: (salariesRes.data || []).map(mapStaffSalary),
     salaryPayments: (salaryPayRes.data || []).map(mapSalaryPayment),
+    shifts: (shiftsRes.data || []).map(mapShift),
   };
 }
 async function fetchAdminData() {
@@ -268,6 +289,7 @@ export default function BilliardPOS() {
   const [staffList, setStaffList] = useState([]);
   const [staffSalaries, setStaffSalaries] = useState([]);
   const [salaryPayments, setSalaryPayments] = useState([]);
+  const [shifts, setShifts] = useState([]);
   const [history, setHistory] = useState([]);
   const [myChat, setMyChat] = useState([]);
 
@@ -313,7 +335,7 @@ export default function BilliardPOS() {
                 if (isBanned(accessUser)) { setScreen("banned"); }
                 else {
                   const od = await fetchOwnerData(ownerIdOf(u));
-                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments);
+                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
                   setScreen(canAccess(accessUser) ? "halls" : "subscribe");
                 }
               }
@@ -334,7 +356,7 @@ export default function BilliardPOS() {
       if (data && data.active_session_token && data.active_session_token !== sessionToken) {
         localStorage.removeItem(SESSION_KEY);
         setCurrentUser(null); setSessionToken(null);
-        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]);
+        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
         setScreen("auth");
         showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
       }
@@ -384,7 +406,7 @@ export default function BilliardPOS() {
 
   async function refreshOwnerData(ownerId) {
     const od = await fetchOwnerData(ownerId || ownerIdOf(currentUser));
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
   }
   async function refreshMyChat() {
     const { data } = await supabase.from("chats").select("*").eq("owner_id", ownerIdOf(currentUser)).order("created_at");
@@ -406,7 +428,7 @@ export default function BilliardPOS() {
     const token = crypto.randomUUID();
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     try { localStorage.setItem(`billiard-pos-newuser-${u.id}`, "1"); } catch (e) {}
-    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]);
+    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
     persistSession({ userId: u.id, isAdmin: false, token });
     setScreen("subscribe");
   }
@@ -453,14 +475,14 @@ export default function BilliardPOS() {
     if (u.role === "staff") setCurrentUser({ ...u, betaAccess: accessUser.betaAccess });
     if (isBanned(accessUser)) { setScreen("banned"); return; }
     const od = await fetchOwnerData(ownerIdOf(u));
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
     setScreen(canAccess(accessUser) ? "halls" : "subscribe");
   }
 
   function handleLogout() {
     persistSession({ userId: null, isAdmin: false });
     setCurrentUser(null); setSessionToken(null); setIsAdmin(false); setAdminLogin(null);
-    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]);
+    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
     setUsers([]); setPromoCodes([]); setAdminAccounts([]); setChatsByUser({});
     setActiveHallId(null); setScreen("auth");
   }
@@ -581,6 +603,7 @@ export default function BilliardPOS() {
         await supabase.from("warehouse_logs").insert({
           warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -item.qty, type: "sale",
           cost_price: costPrice, sell_price: item.price, note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
+          actor_id: currentUser.id, actor_name: currentUser.name,
         });
       } else {
         const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price, cost_price: costPrice }));
@@ -605,8 +628,13 @@ export default function BilliardPOS() {
     const r2 = await supabase.from("warehouse_logs").insert({
       warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: units, type: "add",
       blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: entryDate,
+      actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
+    await refreshOwnerData();
+  }
+  async function setLowStockThreshold(warehouseItemId, threshold) {
+    await supabase.from("warehouse_items").update({ low_stock_threshold: Number(threshold) || 0 }).eq("id", warehouseItemId);
     await refreshOwnerData();
   }
   async function removeStock(warehouseItemId, blocks, unitsPerBlock, note) {
@@ -619,11 +647,12 @@ export default function BilliardPOS() {
     const r2 = await supabase.from("warehouse_logs").insert({
       warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -units, type: "remove",
       blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: new Date().toISOString().slice(0, 10),
+      actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
-  async function sellDirect(warehouseItemId, quantity, note) {
+  async function sellDirect(warehouseItemId, quantity, note, paymentMethod) {
     const wi = warehouseItems.find((w) => w.id === warehouseItemId);
     if (!wi) return;
     const units = Number(quantity) || 0;
@@ -636,6 +665,7 @@ export default function BilliardPOS() {
       warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -units, type: "direct",
       cost_price: barItem ? barItem.costPrice : null, sell_price: barItem ? barItem.price : null,
       note: note || "", entry_date: new Date().toISOString().slice(0, 10),
+      actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
@@ -644,11 +674,12 @@ export default function BilliardPOS() {
     const r = await supabase.from("debts").insert({
       owner_id: ownerIdOf(currentUser), debtor_name: name, debtor_phone: phone || null, amount: Number(amount),
       debt_date: debtDate, due_date: dueDate || null, note: note || null,
+      actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     await refreshOwnerData();
   }
-  async function payDebt(debtId, payAmount) {
+  async function payDebt(debtId, payAmount, paymentMethod) {
     const d = debts.find((x) => x.id === debtId);
     if (!d) return;
     const remaining = d.amount - d.paidAmount;
@@ -660,7 +691,10 @@ export default function BilliardPOS() {
       paid_amount: newPaid, status: closed ? "closed" : "open", closed_at: closed ? new Date().toISOString() : null,
     }).eq("id", debtId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
-    const r2 = await supabase.from("debt_payments").insert({ debt_id: debtId, owner_id: ownerIdOf(currentUser), amount: applied });
+    const r2 = await supabase.from("debt_payments").insert({
+      debt_id: debtId, owner_id: ownerIdOf(currentUser), amount: applied,
+      actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
+    });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
@@ -674,7 +708,10 @@ export default function BilliardPOS() {
       amount: newAmount, status: "open", closed_at: null,
     }).eq("id", debtId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
-    const r2 = await supabase.from("debt_topups").insert({ debt_id: debtId, owner_id: ownerIdOf(currentUser), amount: add, note: note || null });
+    const r2 = await supabase.from("debt_topups").insert({
+      debt_id: debtId, owner_id: ownerIdOf(currentUser), amount: add, note: note || null,
+      actor_id: currentUser.id, actor_name: currentUser.name,
+    });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
@@ -695,7 +732,7 @@ export default function BilliardPOS() {
     });
     await refreshOwnerData();
   }
-  async function closeTable(hallId, tableId, record) {
+  async function closeTable(hallId, tableId, record, paymentMethod) {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
     if (!table || table.status === "free") return; // allaqachon yopilgan — qayta yozmaymiz
@@ -714,6 +751,7 @@ export default function BilliardPOS() {
       duration_seconds: record.duration, table_cost: record.tableCost,
       extras: record.extras, extras_cost: record.extrasCost, total: record.total,
       laps: allLaps, general_note: (table && table.note) || null,
+      actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
     });
     await supabase.from("table_extras").delete().eq("table_id", tableId);
     await supabase.from("table_laps").delete().eq("table_id", tableId);
@@ -849,9 +887,29 @@ export default function BilliardPOS() {
     await refreshOwnerData();
   }
   async function markSalaryPaid(salaryId, staffId, period, amount) {
-    const r = await supabase.from("salary_payments").insert({ salary_id: salaryId, owner_id: currentUser.id, staff_id: staffId, period, amount });
+    const r = await supabase.from("salary_payments").insert({
+      salary_id: salaryId, owner_id: currentUser.id, staff_id: staffId, period, amount,
+      actor_id: currentUser.id, actor_name: currentUser.name,
+    });
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     showToast(`✅ Oylik berildi deb belgilandi`);
+    await refreshOwnerData();
+  }
+  // ---- smena ----
+  async function openShift() {
+    const r = await supabase.from("shifts").insert({
+      owner_id: ownerIdOf(currentUser), opened_by: currentUser.id, opened_by_name: currentUser.name,
+    });
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    showToast(`✅ Smena ochildi`);
+    await refreshOwnerData();
+  }
+  async function closeShift(shiftId) {
+    const r = await supabase.from("shifts").update({
+      status: "closed", closed_by: currentUser.id, closed_by_name: currentUser.name, closed_at: new Date().toISOString(),
+    }).eq("id", shiftId);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    showToast(`✅ Smena yopildi`);
     await refreshOwnerData();
   }
   async function changeAdminPassword(oldPass, newPass) {
@@ -943,6 +1001,8 @@ export default function BilliardPOS() {
           onWarehouse={() => setScreen("warehouse")} onDebts={() => setScreen("debts")}
           onStaff={() => setScreen("staff")} onFinance={() => setScreen("finance")}
           staffSalaries={staffSalaries} staffList={staffList} salaryPayments={salaryPayments} onMarkSalaryPaid={markSalaryPaid}
+          shifts={shifts} onOpenShift={openShift} onCloseShift={closeShift}
+          history={history} warehouseLogs={warehouseLogs}
           onSupport={() => { markReadByUser(); setScreen("support"); }}
           unreadCount={userUnreadCount} onChangePassword={changeOwnPassword}
         />
@@ -952,7 +1012,7 @@ export default function BilliardPOS() {
         <WarehouseScreen
           bar={bar} warehouseItems={warehouseItems} warehouseLogs={warehouseLogs}
           onBack={() => setScreen("halls")}
-          onAddStock={addStock} onRemoveStock={removeStock} onDirectSale={sellDirect} onToast={showToast}
+          onAddStock={addStock} onRemoveStock={removeStock} onDirectSale={sellDirect} onSetThreshold={setLowStockThreshold} onToast={showToast}
         />
       )}
 
@@ -1206,7 +1266,7 @@ function SubscribeScreen({ user, plans, onPromo, onLogout }) {
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onStaff, onFinance, staffSalaries, staffList, salaryPayments, onMarkSalaryPaid, onSupport, unreadCount, onChangePassword }) {
+function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onStaff, onFinance, staffSalaries, staffList, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword }) {
   const [tab, setTab] = useState("halls");
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -1215,6 +1275,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
   const [menuName, setMenuName] = useState("");
   const [menuPrice, setMenuPrice] = useState("");
   const [menuCost, setMenuCost] = useState("");
+  const [showShiftSummary, setShowShiftSummary] = useState(false);
   const [showPass, setShowPass] = useState(false);
   const [oldPass, setOldPass] = useState(""); const [newPass, setNewPass] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -1258,6 +1319,28 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         </div>
       </div>
       <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
+
+      {(() => {
+        const openShiftObj = (shifts || []).find((s) => s.status === "open");
+        return (
+          <div style={{ background: FELT, border: `1px solid ${openShiftObj ? "#7bbf6a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 mb-4 flex items-center justify-between">
+            {openShiftObj ? (
+              <>
+                <div>
+                  <div className="text-xs font-semibold flex items-center gap-1" style={{ color: "#7bbf6a" }}>🟢 Smena ochiq</div>
+                  <div className="text-[11px] mt-0.5" style={{ color: "#b8c9bf" }}>{openShiftObj.openedByName} · {fmtDate(openShiftObj.openedAt)} dan beri</div>
+                </div>
+                <button onClick={() => setShowShiftSummary(true)} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: RED, color: "#fff" }}>Yopish</button>
+              </>
+            ) : (
+              <>
+                <div className="text-xs" style={{ color: "#b8c9bf" }}>Smena ochilmagan</div>
+                <button onClick={onOpenShift} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Smena ochish</button>
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {user.role === "owner" && (() => {
         const today = new Date();
@@ -1461,12 +1544,39 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
             className="w-full py-3 rounded-xl font-semibold text-sm">Saqlash</button>
         </Modal>
       )}
+
+      {showShiftSummary && (() => {
+        const openShiftObj = (shifts || []).find((s) => s.status === "open");
+        if (!openShiftObj) { setShowShiftSummary(false); return null; }
+        const from = openShiftObj.openedAt;
+        const periodHistory = (history || []).filter((h) => h.endTime >= from);
+        const periodDirect = (warehouseLogs || []).filter((l) => l.type === "direct" && l.createdAt >= from);
+        const byMethod = { naqd: 0, karta: 0, click: 0, payme: 0 };
+        let total = 0;
+        periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.total; total += h.total; });
+        periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; const amt = (l.sellPrice || 0) * -l.changeUnits; byMethod[m] = (byMethod[m] || 0) + amt; total += amt; });
+        return (
+          <Modal onClose={() => setShowShiftSummary(false)}>
+            <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Smenani yopish</h2>
+            <div className="space-y-2 mb-4">
+              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Click</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.click)}</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Payme</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.payme)}</span></div>
+              <div className="flex justify-between text-sm font-semibold pt-2 border-t" style={{ borderColor: FELT_LIGHT, color: GOLD }}><span>Jami</span><span className="font-mono">{fmtMoney(total)}</span></div>
+            </div>
+            <button onClick={() => { onCloseShift(openShiftObj.id); setShowShiftSummary(false); }} style={{ background: RED, color: "#fff" }} className="w-full py-3 rounded-xl font-semibold text-sm">
+              Smenani yopish
+            </button>
+          </Modal>
+        );
+      })()}
     </div>
   );
 }
 
 // ---------------- SKLAD ----------------
-function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStock, onRemoveStock, onDirectSale, onToast }) {
+function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStock, onRemoveStock, onDirectSale, onSetThreshold, onToast }) {
   const [tab, setTab] = useState("stock"); // stock | report
   const [showAdd, setShowAdd] = useState(false);
   const [pickedBarItem, setPickedBarItem] = useState(null);
@@ -1481,8 +1591,10 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
   const [sellItem, setSellItem] = useState(null);
   const [sellQty, setSellQty] = useState("");
   const [sellNote, setSellNote] = useState("");
+  const [sellMethod, setSellMethod] = useState("naqd");
 
   function itemLog(id) { return warehouseLogs.filter((l) => l.warehouseItemId === id); }
+  const lowItems = warehouseItems.filter((w) => w.units <= w.lowStockThreshold);
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
@@ -1490,6 +1602,15 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
         <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
         <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><Boxes size={18} style={{ color: GOLD }} /> Sklad</h1>
       </div>
+
+      {lowItems.length > 0 && (
+        <div style={{ background: "rgba(178,58,58,0.15)", border: "1px solid #b23a3a" }} className="rounded-xl p-3 mb-4">
+          <div className="text-xs font-semibold mb-1" style={{ color: "#ff8a8a" }}>⚠️ Kam qolgan tovarlar</div>
+          {lowItems.map((w) => (
+            <div key={w.id} className="text-xs" style={{ color: CREAM }}>{w.name} — {w.units} dona qoldi</div>
+          ))}
+        </div>
+      )}
 
       <div className="flex gap-2 mb-5">
         <button onClick={() => setTab("stock")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "stock" ? GOLD : FELT, color: tab === "stock" ? FELT_DARK : CREAM }}>Qoldiq</button>
@@ -1507,14 +1628,21 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
             <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha sklad bo'sh</p>
           ) : (
             <div className="space-y-2">
-              {warehouseItems.map((w) => (
-                <div key={w.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 flex items-center justify-between gap-2">
+              {warehouseItems.map((w) => {
+                const low = w.units <= w.lowStockThreshold;
+                return (
+                <div key={w.id} style={{ background: FELT, border: `1px solid ${low ? "#b23a3a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{w.name}</div>
-                    <div className="text-xs" style={{ color: "#b8c9bf" }}>{w.units} dona qoldi</div>
+                    <div className="text-xs" style={{ color: low ? "#ff8a8a" : "#b8c9bf" }}>{w.units} dona qoldi</div>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-[10px]" style={{ color: "#8fa398" }}>Kam qolish chegarasi:</span>
+                      <input defaultValue={w.lowStockThreshold} onBlur={(e) => { if (Number(e.target.value) !== w.lowStockThreshold) onSetThreshold(w.id, e.target.value); }}
+                        className="w-12 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "#8fa398", border: `1px solid ${FELT_LIGHT}` }} />
+                    </div>
                   </div>
                   <div className="flex gap-1.5 shrink-0">
-                    <button onClick={() => { setSellItem(w); setSellQty(""); setSellNote(""); }}
+                    <button onClick={() => { setSellItem(w); setSellQty(""); setSellNote(""); setSellMethod("naqd"); }}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1" style={{ background: "#0e4a36", color: "#7fd99a" }}>
                       Sotish
                     </button>
@@ -1524,7 +1652,8 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </>
@@ -1541,7 +1670,7 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
                 <div>
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{wi ? wi.name : "?"}</div>
                   <div className="text-[11px]" style={{ color: "#b8c9bf" }}>
-                    {l.entryDate} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : "stolga sotildi"}{l.note ? ` · ${l.note}` : ""}
+                    {l.entryDate} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : "stolga sotildi"}{l.note ? ` · ${l.note}` : ""}{l.actorName ? ` · ${l.actorName}` : ""}
                   </div>
                 </div>
                 <div className="text-sm font-semibold" style={{ color: l.changeUnits > 0 ? "#7fd99a" : "#ff8a8a" }}>
@@ -1634,11 +1763,22 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
             <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha dona</label>
             <input type="number" value={sellQty} onChange={(e) => setSellQty(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
+          <div className="mb-3">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>To'lov turi</label>
+            <div className="grid grid-cols-4 gap-1.5">
+              {[["naqd", "Naqd"], ["karta", "Karta"], ["click", "Click"], ["payme", "Payme"]].map(([val, label]) => (
+                <button key={val} onClick={() => setSellMethod(val)}
+                  className="py-2 rounded-lg text-xs font-medium" style={{ background: sellMethod === val ? GOLD : FELT_DARK, color: sellMethod === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <textarea value={sellNote} onChange={(e) => setSellNote(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy)"
             className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <button disabled={!sellQty || Number(sellQty) <= 0}
             onClick={() => {
-              onDirectSale(sellItem.id, sellQty, sellNote.trim());
+              onDirectSale(sellItem.id, sellQty, sellNote.trim(), sellMethod);
               onToast(`✅ ${sellItem.name} sotildi`);
               setSellItem(null);
             }}
@@ -1663,6 +1803,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
   const [note, setNote] = useState("");
   const [payTarget, setPayTarget] = useState(null);
   const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState("naqd");
   const [topupTarget, setTopupTarget] = useState(null);
   const [topupAmount, setTopupAmount] = useState("");
   const [topupNote, setTopupNote] = useState("");
@@ -1709,8 +1850,8 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
                 const payments = (debtPayments || []).filter((p) => p.debtId === d.id);
                 const topups = (debtTopups || []).filter((t) => t.debtId === d.id);
                 const timeline = [
-                  ...payments.map((p) => ({ id: `p-${p.id}`, at: p.paidAt, text: `− ${fmtMoney(p.amount)} to'landi` })),
-                  ...topups.map((t) => ({ id: `t-${t.id}`, at: t.addedAt, text: `+ ${fmtMoney(t.amount)} qarz qo'shildi${t.note ? ` (${t.note})` : ""}` })),
+                  ...payments.map((p) => ({ id: `p-${p.id}`, at: p.paidAt, text: `− ${fmtMoney(p.amount)} to'landi (${p.paymentMethod || "naqd"})${p.actorName ? ` · ${p.actorName}` : ""}` })),
+                  ...topups.map((t) => ({ id: `t-${t.id}`, at: t.addedAt, text: `+ ${fmtMoney(t.amount)} qarz qo'shildi${t.note ? ` (${t.note})` : ""}${t.actorName ? ` · ${t.actorName}` : ""}` })),
                 ].sort((a, b) => a.at - b.at);
                 return (
                   <div key={d.id} style={{ background: FELT, border: `1px solid ${overdue ? "#b23a3a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5">
@@ -1720,7 +1861,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
                     </div>
                     {d.phone && <div className="text-xs mb-0.5" style={{ color: "#b8c9bf" }}>📞 {d.phone}</div>}
                     <div className="text-xs mb-1" style={{ color: "#b8c9bf" }}>
-                      {d.debtDate} dan{d.dueDate ? ` · qaytarish: ${d.dueDate}` : ""} · jami: {fmtMoney(d.amount)}{d.paidAmount > 0 ? ` · ${fmtMoney(d.paidAmount)} to'langan` : ""}
+                      {d.debtDate} dan{d.dueDate ? ` · qaytarish: ${d.dueDate}` : ""} · jami: {fmtMoney(d.amount)}{d.paidAmount > 0 ? ` · ${fmtMoney(d.paidAmount)} to'langan` : ""}{d.actorName ? ` · yozgan: ${d.actorName}` : ""}
                     </div>
                     {d.note && <div className="text-xs mb-2" style={{ color: "#b8c9bf" }}>💬 {d.note}</div>}
                     {timeline.length > 0 && (
@@ -1821,8 +1962,16 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
       {payTarget && (
         <Modal onClose={() => setPayTarget(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{payTarget.name}" qarzini qoplash</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Qoldiq qarz: {fmtMoney(payTarget.amount - payTarget.paidAmount)}</p>
-          <button onClick={() => { onPayDebt(payTarget.id, null); onToast(`✅ Qarz to'liq yopildi`); setPayTarget(null); }}
+          <p className="text-sm mb-3" style={{ color: "#b8c9bf" }}>Qoldiq qarz: {fmtMoney(payTarget.amount - payTarget.paidAmount)}</p>
+          <div className="grid grid-cols-4 gap-1.5 mb-3">
+            {[["naqd", "Naqd"], ["karta", "Karta"], ["click", "Click"], ["payme", "Payme"]].map(([val, label]) => (
+              <button key={val} onClick={() => setPayMethod(val)}
+                className="py-2 rounded-lg text-xs font-medium" style={{ background: payMethod === val ? GOLD : FELT_DARK, color: payMethod === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => { onPayDebt(payTarget.id, null, payMethod); onToast(`✅ Qarz to'liq yopildi`); setPayTarget(null); }}
             style={{ background: "#0e4a36", color: "#7fd99a", border: "1px solid #7fd99a" }} className="w-full mb-3 py-3 rounded-xl font-semibold text-sm">
             Umumiy qarzni to'liq yopish
           </button>
@@ -1839,7 +1988,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
             </p>
           )}
           <button disabled={!payAmount || Number(payAmount) <= 0}
-            onClick={() => { onPayDebt(payTarget.id, payAmount); onToast(`✅ To'lov qabul qilindi`); setPayTarget(null); }}
+            onClick={() => { onPayDebt(payTarget.id, payAmount, payMethod); onToast(`✅ To'lov qabul qilindi`); setPayTarget(null); }}
             style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
             Kiritish
           </button>
@@ -1985,18 +2134,38 @@ function FinanceScreen({ history, warehouseLogs, salaryPayments, onBack }) {
   });
   const salaryTotal = periodSalaries.reduce((s, p) => s + p.amount, 0);
   const net = gross - costOfGoods - salaryTotal;
+  const byMethod = { naqd: 0, karta: 0, click: 0, payme: 0 };
+  periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.total; });
+  periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + (l.sellPrice || 0) * -l.changeUnits; });
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
-        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><TrendingUp size={18} style={{ color: GOLD }} /> Moliya</h1>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
+          <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><TrendingUp size={18} style={{ color: GOLD }} /> Moliya</h1>
+        </div>
+        <button onClick={() => downloadCSV(`moliya-${tab}.csv`, ["Sana", "Zal", "Stol", "Jami", "Kim yopdi", "To'lov turi"],
+          periodHistory.map((h) => [fmtDate(h.endTime), h.hallName, h.tableName, h.total, h.actorName, h.paymentMethod]))}
+          className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg font-medium" style={{ background: FELT, color: GOLD, border: `1px solid ${FELT_LIGHT}` }}>
+          <Download size={13} /> CSV
+        </button>
       </div>
 
       <div className="flex gap-2 mb-5">
         <button onClick={() => setTab("today")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "today" ? GOLD : FELT, color: tab === "today" ? FELT_DARK : CREAM }}>Bugun</button>
         <button onClick={() => setTab("week")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "week" ? GOLD : FELT, color: tab === "week" ? FELT_DARK : CREAM }}>7 kun</button>
         <button onClick={() => setTab("month")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "month" ? GOLD : FELT, color: tab === "month" ? FELT_DARK : CREAM }}>30 kun</button>
+      </div>
+
+      <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 mb-3">
+        <div className="text-xs mb-2" style={{ color: "#8fa398" }}>To'lov turi bo'yicha</div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
+          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
+          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Click</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.click)}</span></div>
+          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Payme</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.payme)}</span></div>
+        </div>
       </div>
 
       <div className="space-y-2">
@@ -2036,6 +2205,7 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
   const [confirmClose, setConfirmClose] = useState(null);
   const [receipt, setReceipt] = useState(null);
   const [closing, setClosing] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState("naqd");
   const [noteTable, setNoteTable] = useState(null);
   const [noteText, setNoteText] = useState("");
   const [lapTable, setLapTable] = useState(null);
@@ -2364,7 +2534,18 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
       {lapTable && (
         <Modal onClose={() => setLapTable(null)}>
           <h2 className="font-display text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: CREAM }}><Flag size={17} /> {lapTable.name} — znak qo'yish</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Hozirgi segment (oxirgi znakdan yoki boshlanishdan hozirgacha) alohida yozib qo'yiladi, stol yopilmaydi.</p>
+          <p className="text-sm mb-2" style={{ color: "#b8c9bf" }}>Hozirgi segment (oxirgi znakdan yoki boshlanishdan hozirgacha) alohida yozib qo'yiladi, stol yopilmaydi.</p>
+          {(() => {
+            const lastEnd = lapTable.laps.length > 0 ? Math.max(...lapTable.laps.map((l) => l.end)) : lapTable.startTime;
+            const segSeconds = Math.max(0, (now - lastEnd) / 1000);
+            const segCost = (segSeconds / 3600) * lapTable.rate;
+            return (
+              <div className="flex items-center justify-between mb-4 px-3 py-2 rounded-lg" style={{ background: FELT_DARK }}>
+                <span className="text-xs" style={{ color: "#b8c9bf" }}>Shu segment: {fmtDuration(segSeconds)}</span>
+                <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(segCost)}</span>
+              </div>
+            );
+          })()}
           <textarea value={lapComment} onChange={(e) => setLapComment(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy) — masalan kim o'ynadi"
             className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <button onClick={() => { onAddLap(lapTable.id, lapComment.trim()); setLapTable(null); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
@@ -2432,10 +2613,21 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
           <ReceiptView title={`${hall.name} · ${receipt.table.name}`} start={receipt.startTime} end={receipt.endTime}
             duration={receipt.duration} tableCost={receipt.tableCost} extras={receipt.extras} extrasCost={receipt.extrasCost}
             laps={receipt.laps} generalNote={receipt.generalNote} />
+          <div className="mb-2">
+            <div className="text-xs mb-1.5" style={{ color: "#b8c9bf" }}>To'lov turi</div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {[["naqd", "Naqd"], ["karta", "Karta"], ["click", "Click"], ["payme", "Payme"]].map(([val, label]) => (
+                <button key={val} onClick={() => setPaymentMethod(val)}
+                  className="py-2 rounded-lg text-xs font-medium" style={{ background: paymentMethod === val ? GOLD : FELT_DARK, color: paymentMethod === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <button disabled={closing} onClick={async () => {
             if (closing) return;
             setClosing(true);
-            await onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost });
+            await onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost }, paymentMethod);
             setReceipt(null);
             setClosing(false);
           }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 mt-2 disabled:opacity-50">
@@ -2514,7 +2706,14 @@ function StatsScreen({ history, onBack }) {
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
-      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
+      <div className="flex items-center justify-between mb-4">
+        <button onClick={onBack} className="flex items-center gap-1 text-sm" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
+        <button onClick={() => downloadCSV("statistika.csv", ["Sana", "Zal", "Stol", "Boshlanish", "Tugash", "Davomiyligi", "Stol narxi", "Bar", "Jami", "Kim yopdi", "To'lov turi"],
+          history.map((h) => [fmtDate(h.endTime), h.hallName, h.tableName, fmtTime(h.startTime), fmtTime(h.endTime), fmtDuration(h.duration), h.tableCost, h.extrasCost, h.total, h.actorName, h.paymentMethod]))}
+          className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg font-medium" style={{ background: FELT, color: GOLD, border: `1px solid ${FELT_LIGHT}` }}>
+          <Download size={13} /> Excel (CSV)
+        </button>
+      </div>
       <h1 className="font-display text-2xl font-semibold mb-6" style={{ color: CREAM }}>Statistika</h1>
 
       <div className="grid grid-cols-3 gap-2 mb-6">
@@ -2539,7 +2738,7 @@ function StatsScreen({ history, onBack }) {
                 <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-3 py-2.5 rounded-lg text-left" style={{ background: FELT_DARK }}>
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-                    <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)}</div>
+                    <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.actorName ? ` · ${h.actorName}` : ""}</div>
                   </div>
                   <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
                 </button>
@@ -2556,7 +2755,7 @@ function StatsScreen({ history, onBack }) {
           <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-5 py-3 text-left" style={{ borderBottom: `1px dashed ${FELT_LIGHT}` }}>
             <div>
               <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-              <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}</div>
+              <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}{h.actorName ? ` · ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
             </div>
             <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
           </button>
