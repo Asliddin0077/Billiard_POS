@@ -3,7 +3,7 @@ import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
   Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
-  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight, Boxes, Wallet, Minus
+  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight, Boxes, Wallet, Minus, TrendingUp
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.1.2"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.3.1")
+const APP_VERSION = "1.4.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.4.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -66,6 +66,11 @@ function isBanned(u) {
   return u && u.banned && u.banUntil && u.banUntil > Date.now();
 }
 function unwrapRpc(data) { return Array.isArray(data) ? data[0] : data; }
+async function resolveAccessUser(u) {
+  if (!u || u.role !== "staff" || !u.parentOwnerId) return u;
+  const { data } = await supabase.from("users").select("*").eq("id", u.parentOwnerId).single();
+  return data ? mapUser(data) : u;
+}
 function computeNewUntil(currentUntilMs, days) {
   const now = Date.now();
   const base = currentUntilMs && currentUntilMs > now ? currentUntilMs : now;
@@ -81,8 +86,10 @@ function mapUser(row) {
     banned: row.banned, banUntil: row.ban_until ? new Date(row.ban_until).getTime() : null,
     banReason: row.ban_reason || "", createdAt: new Date(row.created_at).getTime(),
     subscriptionUntil: row.subscription_until ? new Date(row.subscription_until).getTime() : null,
+    role: row.role || "owner", parentOwnerId: row.parent_owner_id || null,
   };
 }
+function ownerIdOf(u) { return u && u.role === "staff" && u.parentOwnerId ? u.parentOwnerId : (u ? u.id : null); }
 function mapLap(row) {
   return { id: row.id, start: new Date(row.lap_start).getTime(), end: new Date(row.lap_end).getTime(), duration: Number(row.duration_seconds), comment: row.comment || "" };
 }
@@ -95,7 +102,7 @@ function mapTable(row) {
     prepaidAmount: row.prepaid_amount != null ? Number(row.prepaid_amount) : null,
     pausedAt: row.paused_at ? new Date(row.paused_at).getTime() : null,
     pausedSeconds: row.paused_seconds != null ? Number(row.paused_seconds) : 0,
-    extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price) })),
+    extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price), costPrice: Number(e.cost_price || 0) })),
     laps: (row.table_laps || []).map(mapLap).sort((a, b) => a.end - b.end),
   };
 }
@@ -109,13 +116,13 @@ function stableTableOrder(tables) {
   });
 }
 function mapHall(row) { return { id: row.id, name: row.name, tables: stableTableOrder((row.billiard_tables || []).map(mapTable)) }; }
-function mapBarItem(row) { return { id: row.id, name: row.name, price: Number(row.price), emoji: row.emoji, color: row.color }; }
+function mapBarItem(row) { return { id: row.id, name: row.name, price: Number(row.price), costPrice: Number(row.cost_price || 0), emoji: row.emoji, color: row.color }; }
 function mapHistory(row) {
   return {
     id: row.id, hallName: row.hall_name, tableName: row.table_name,
     startTime: new Date(row.start_time).getTime(), endTime: new Date(row.end_time).getTime(),
     duration: Number(row.duration_seconds), tableCost: Number(row.table_cost),
-    extras: (row.extras || []).map((e) => ({ ...e, price: Number(e.price) })),
+    extras: (row.extras || []).map((e) => ({ ...e, price: Number(e.price), costPrice: Number(e.costPrice || 0) })),
     extrasCost: Number(row.extras_cost), total: Number(row.total),
     laps: (row.laps || []).map((l) => ({ ...l, cost: Number(l.cost || 0) })),
     generalNote: row.general_note || "",
@@ -129,6 +136,7 @@ function mapWarehouseItem(row) { return { id: row.id, barItemId: row.bar_item_id
 function mapWarehouseLog(row) {
   return { id: row.id, warehouseItemId: row.warehouse_item_id, changeUnits: Number(row.change_units), type: row.type,
     blocks: row.blocks != null ? Number(row.blocks) : null, unitsPerBlock: row.units_per_block != null ? Number(row.units_per_block) : null,
+    costPrice: row.cost_price != null ? Number(row.cost_price) : null, sellPrice: row.sell_price != null ? Number(row.sell_price) : null,
     note: row.note || "", entryDate: row.entry_date, createdAt: new Date(row.created_at).getTime() };
 }
 function mapDebt(row) {
@@ -142,10 +150,16 @@ function mapDebtPayment(row) {
 function mapDebtTopup(row) {
   return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), note: row.note || "", addedAt: new Date(row.added_at).getTime() };
 }
+function mapStaffSalary(row) {
+  return { id: row.id, staffId: row.staff_id, amount: Number(row.amount), payDay: Number(row.pay_day) };
+}
+function mapSalaryPayment(row) {
+  return { id: row.id, salaryId: row.salary_id, staffId: row.staff_id, period: row.period, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime() };
+}
 
 // ---------------- data fetch helpers ----------------
 async function fetchOwnerData(ownerId) {
-  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes] = await Promise.all([
+  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes, staffRes, salariesRes, salaryPayRes] = await Promise.all([
     supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" }),
     supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
@@ -155,6 +169,9 @@ async function fetchOwnerData(ownerId) {
     supabase.from("debts").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }),
     supabase.from("debt_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
     supabase.from("debt_topups").select("*").eq("owner_id", ownerId).order("added_at", { ascending: false }),
+    supabase.from("users").select("*").eq("parent_owner_id", ownerId).eq("role", "staff").order("created_at"),
+    supabase.from("staff_salaries").select("*").eq("owner_id", ownerId),
+    supabase.from("salary_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
   ]);
   return {
     halls: (hallsRes.data || []).map(mapHall),
@@ -166,6 +183,9 @@ async function fetchOwnerData(ownerId) {
     debts: (debtsRes.data || []).map(mapDebt),
     debtPayments: (debtPayRes.data || []).map(mapDebtPayment),
     debtTopups: (debtTopupRes.data || []).map(mapDebtTopup),
+    staffList: (staffRes.data || []).map(mapUser),
+    staffSalaries: (salariesRes.data || []).map(mapStaffSalary),
+    salaryPayments: (salaryPayRes.data || []).map(mapSalaryPayment),
   };
 }
 async function fetchAdminData() {
@@ -245,6 +265,9 @@ export default function BilliardPOS() {
   const [debts, setDebts] = useState([]);
   const [debtPayments, setDebtPayments] = useState([]);
   const [debtTopups, setDebtTopups] = useState([]);
+  const [staffList, setStaffList] = useState([]);
+  const [staffSalaries, setStaffSalaries] = useState([]);
+  const [salaryPayments, setSalaryPayments] = useState([]);
   const [history, setHistory] = useState([]);
   const [myChat, setMyChat] = useState([]);
 
@@ -285,11 +308,12 @@ export default function BilliardPOS() {
               } else {
                 const u = mapUser(data);
                 setCurrentUser(u); setSessionToken(s.token || null);
-                if (isBanned(u)) { setScreen("banned"); }
+                const accessUser = await resolveAccessUser(u);
+                if (isBanned(accessUser)) { setScreen("banned"); }
                 else {
-                  const od = await fetchOwnerData(u.id);
-                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups);
-                  setScreen(canAccess(u) ? "halls" : "subscribe");
+                  const od = await fetchOwnerData(ownerIdOf(u));
+                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments);
+                  setScreen(canAccess(accessUser) ? "halls" : "subscribe");
                 }
               }
             }
@@ -309,7 +333,7 @@ export default function BilliardPOS() {
       if (data && data.active_session_token && data.active_session_token !== sessionToken) {
         localStorage.removeItem(SESSION_KEY);
         setCurrentUser(null); setSessionToken(null);
-        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]);
+        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]);
         setScreen("auth");
         showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
       }
@@ -358,11 +382,11 @@ export default function BilliardPOS() {
   const adminUnreadUserCount = users.filter((u) => (chatsByUser[u.id] || []).some((m) => m.from === "user" && !m.readByAdmin)).length;
 
   async function refreshOwnerData(ownerId) {
-    const od = await fetchOwnerData(ownerId || currentUser.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups);
+    const od = await fetchOwnerData(ownerId || ownerIdOf(currentUser));
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments);
   }
   async function refreshMyChat() {
-    const { data } = await supabase.from("chats").select("*").eq("owner_id", currentUser.id).order("created_at");
+    const { data } = await supabase.from("chats").select("*").eq("owner_id", ownerIdOf(currentUser)).order("created_at");
     setMyChat((data || []).map(mapChat));
   }
   async function loadAdmin() {
@@ -381,7 +405,7 @@ export default function BilliardPOS() {
     const token = crypto.randomUUID();
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     try { localStorage.setItem(`billiard-pos-newuser-${u.id}`, "1"); } catch (e) {}
-    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]);
+    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]);
     persistSession({ userId: u.id, isAdmin: false, token });
     setScreen("subscribe");
   }
@@ -424,16 +448,17 @@ export default function BilliardPOS() {
     setSessionToken(token);
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     persistSession({ userId: u.id, isAdmin: false, token });
-    if (isBanned(u)) { setScreen("banned"); return; }
-    const od = await fetchOwnerData(u.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups);
-    setScreen(canAccess(u) ? "halls" : "subscribe");
+    const accessUser = await resolveAccessUser(u);
+    if (isBanned(accessUser)) { setScreen("banned"); return; }
+    const od = await fetchOwnerData(ownerIdOf(u));
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments);
+    setScreen(canAccess(accessUser) ? "halls" : "subscribe");
   }
 
   function handleLogout() {
     persistSession({ userId: null, isAdmin: false });
     setCurrentUser(null); setSessionToken(null); setIsAdmin(false); setAdminLogin(null);
-    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]);
+    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]);
     setUsers([]); setPromoCodes([]); setAdminAccounts([]); setChatsByUser({});
     setActiveHallId(null); setScreen("auth");
   }
@@ -453,7 +478,7 @@ export default function BilliardPOS() {
   // To'lov endi Telegram bot orqali (@Billiard_pos_bot) - admin qo'lda faollashtiradi
 
   // ---- halls/tables ----
-  async function createHall(name) { await supabase.from("halls").insert({ owner_id: currentUser.id, name }); await refreshOwnerData(); }
+  async function createHall(name) { await supabase.from("halls").insert({ owner_id: ownerIdOf(currentUser), name }); await refreshOwnerData(); }
   async function renameHall(hallId, name) { await supabase.from("halls").update({ name }).eq("id", hallId); await refreshOwnerData(); }
   async function deleteHall(hallId) { await supabase.from("halls").delete().eq("id", hallId); await refreshOwnerData(); }
   async function createTable(hallId, name, rate) {
@@ -528,7 +553,7 @@ export default function BilliardPOS() {
       await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
       await supabase.from("warehouse_items").update({ units_in_stock: wi.units - 1 }).eq("id", wi.id);
       await supabase.from("warehouse_logs").insert({
-        warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -1, type: "sale",
+        warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -1, type: "sale",
         note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
       });
     } else {
@@ -540,21 +565,23 @@ export default function BilliardPOS() {
   async function addExtrasBatch(hallId, tableId, items) {
     for (const item of items) {
       if (!item || item.qty <= 0) continue;
+      const barItem = item.barItemId ? bar.find((b) => b.id === item.barItemId) : null;
+      const costPrice = barItem ? barItem.costPrice : 0;
       if (item.barItemId && currentUser && currentUser.betaAccess) {
         const wi = warehouseItems.find((w) => w.barItemId === item.barItemId);
         if (!wi || wi.units < item.qty) {
           showToast(`❌ Skladda "${item.name}" yetarli emas (${wi ? wi.units : 0} dona bor)`);
           continue;
         }
-        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price }));
+        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price, cost_price: costPrice }));
         await supabase.from("table_extras").insert(rows);
         await supabase.from("warehouse_items").update({ units_in_stock: wi.units - item.qty }).eq("id", wi.id);
         await supabase.from("warehouse_logs").insert({
-          warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -item.qty, type: "sale",
-          note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
+          warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -item.qty, type: "sale",
+          cost_price: costPrice, sell_price: item.price, note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
         });
       } else {
-        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price }));
+        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price, cost_price: costPrice }));
         await supabase.from("table_extras").insert(rows);
       }
     }
@@ -566,7 +593,7 @@ export default function BilliardPOS() {
     let wi = warehouseItems.find((w) => w.barItemId === barItemId);
     if (!wi) {
       const { data, error } = await supabase.from("warehouse_items").insert({
-        owner_id: currentUser.id, bar_item_id: barItemId, name, units_in_stock: 0,
+        owner_id: ownerIdOf(currentUser), bar_item_id: barItemId, name, units_in_stock: 0,
       }).select().single();
       if (error) { showToast(`❌ Xatolik: ${error.message}`); return; }
       wi = mapWarehouseItem(data);
@@ -574,7 +601,7 @@ export default function BilliardPOS() {
     const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units + units }).eq("id", wi.id);
     if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
     const r2 = await supabase.from("warehouse_logs").insert({
-      warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: units, type: "add",
+      warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: units, type: "add",
       blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: entryDate,
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
@@ -588,7 +615,7 @@ export default function BilliardPOS() {
     const r1 = await supabase.from("warehouse_items").update({ units_in_stock: Math.max(0, wi.units - units) }).eq("id", wi.id);
     if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
     const r2 = await supabase.from("warehouse_logs").insert({
-      warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -units, type: "remove",
+      warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -units, type: "remove",
       blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: new Date().toISOString().slice(0, 10),
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
@@ -600,10 +627,12 @@ export default function BilliardPOS() {
     const units = Number(quantity) || 0;
     if (units <= 0) return;
     if (units > wi.units) { showToast(`❌ Skladda faqat ${wi.units} dona bor`); return; }
+    const barItem = wi.barItemId ? bar.find((b) => b.id === wi.barItemId) : null;
     const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units - units }).eq("id", wi.id);
     if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
     const r2 = await supabase.from("warehouse_logs").insert({
-      warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -units, type: "direct",
+      warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -units, type: "direct",
+      cost_price: barItem ? barItem.costPrice : null, sell_price: barItem ? barItem.price : null,
       note: note || "", entry_date: new Date().toISOString().slice(0, 10),
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
@@ -611,7 +640,7 @@ export default function BilliardPOS() {
   }
   async function addDebt(name, phone, amount, debtDate, dueDate, note) {
     const r = await supabase.from("debts").insert({
-      owner_id: currentUser.id, debtor_name: name, debtor_phone: phone || null, amount: Number(amount),
+      owner_id: ownerIdOf(currentUser), debtor_name: name, debtor_phone: phone || null, amount: Number(amount),
       debt_date: debtDate, due_date: dueDate || null, note: note || null,
     });
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
@@ -629,7 +658,7 @@ export default function BilliardPOS() {
       paid_amount: newPaid, status: closed ? "closed" : "open", closed_at: closed ? new Date().toISOString() : null,
     }).eq("id", debtId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
-    const r2 = await supabase.from("debt_payments").insert({ debt_id: debtId, owner_id: currentUser.id, amount: applied });
+    const r2 = await supabase.from("debt_payments").insert({ debt_id: debtId, owner_id: ownerIdOf(currentUser), amount: applied });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
@@ -643,7 +672,7 @@ export default function BilliardPOS() {
       amount: newAmount, status: "open", closed_at: null,
     }).eq("id", debtId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
-    const r2 = await supabase.from("debt_topups").insert({ debt_id: debtId, owner_id: currentUser.id, amount: add, note: note || null });
+    const r2 = await supabase.from("debt_topups").insert({ debt_id: debtId, owner_id: ownerIdOf(currentUser), amount: add, note: note || null });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
@@ -678,7 +707,7 @@ export default function BilliardPOS() {
       finalLap,
     ];
     await supabase.from("session_history").insert({
-      owner_id: currentUser.id, hall_name: hall ? hall.name : "", table_name: record.tableName,
+      owner_id: ownerIdOf(currentUser), hall_name: hall ? hall.name : "", table_name: record.tableName,
       start_time: new Date(record.startTime).toISOString(), end_time: new Date(record.endTime).toISOString(),
       duration_seconds: record.duration, table_cost: record.tableCost,
       extras: record.extras, extras_cost: record.extrasCost, total: record.total,
@@ -691,19 +720,23 @@ export default function BilliardPOS() {
   }
 
   // ---- bar ----
-  async function addMenuItem(name, price) {
-    await supabase.from("bar_items").insert({ owner_id: currentUser.id, name, price, emoji: guessEmoji(name), color: colorFor(name) });
+  async function addMenuItem(name, price, costPrice) {
+    await supabase.from("bar_items").insert({ owner_id: ownerIdOf(currentUser), name, price, cost_price: Number(costPrice) || 0, emoji: guessEmoji(name), color: colorFor(name) });
+    await refreshOwnerData();
+  }
+  async function updateMenuItemCost(itemId, costPrice) {
+    await supabase.from("bar_items").update({ cost_price: Number(costPrice) || 0 }).eq("id", itemId);
     await refreshOwnerData();
   }
   async function deleteMenuItem(itemId) { await supabase.from("bar_items").delete().eq("id", itemId); await refreshOwnerData(); }
 
   // ---- chat (user side) ----
   async function sendUserMessage(text) {
-    await supabase.from("chats").insert({ owner_id: currentUser.id, from_role: "user", message: text, read_by_admin: false, read_by_user: true });
+    await supabase.from("chats").insert({ owner_id: ownerIdOf(currentUser), from_role: "user", message: text, read_by_admin: false, read_by_user: true });
     await refreshMyChat();
   }
   async function markReadByUser() {
-    await supabase.from("chats").update({ read_by_user: true }).eq("owner_id", currentUser.id).eq("from_role", "admin").eq("read_by_user", false);
+    await supabase.from("chats").update({ read_by_user: true }).eq("owner_id", ownerIdOf(currentUser)).eq("from_role", "admin").eq("read_by_user", false);
     await refreshMyChat();
   }
 
@@ -788,6 +821,34 @@ export default function BilliardPOS() {
     if (error || !data) { showToast("Eski parol noto'g'ri"); return; }
     showToast("Parol muvaffaqiyatli yangilandi");
   }
+  // ---- xodimlar ----
+  async function createStaffAccount(name, phone, login, password) {
+    if (!name.trim() || !login.trim() || password.length < 8) { showToast("Barcha maydonlarni to'g'ri to'ldiring (parol kamida 8 belgi)"); return; }
+    const normPhone = normalizePhone(phone) || phone.trim();
+    const { error } = await supabase.rpc("register_staff", { p_owner_id: currentUser.id, p_name: name.trim(), p_phone: normPhone, p_login: login.trim(), p_password: password });
+    if (error) { showToast(error.message.includes("LOGIN_TAKEN") ? "Bu login band" : "Xatolik yuz berdi"); return; }
+    showToast(`✅ ${name} uchun akaunt yaratildi`);
+    await refreshOwnerData();
+  }
+  async function deleteStaffAccount(staffId) {
+    await supabase.from("users").delete().eq("id", staffId);
+    await refreshOwnerData();
+  }
+  async function setStaffSalary(staffId, amount, payDay) {
+    const existing = staffSalaries.find((s) => s.staffId === staffId);
+    if (existing) {
+      await supabase.from("staff_salaries").update({ amount: Number(amount), pay_day: Number(payDay) }).eq("id", existing.id);
+    } else {
+      await supabase.from("staff_salaries").insert({ owner_id: currentUser.id, staff_id: staffId, amount: Number(amount), pay_day: Number(payDay) });
+    }
+    await refreshOwnerData();
+  }
+  async function markSalaryPaid(salaryId, staffId, period, amount) {
+    const r = await supabase.from("salary_payments").insert({ salary_id: salaryId, owner_id: currentUser.id, staff_id: staffId, period, amount });
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    showToast(`✅ Oylik berildi deb belgilandi`);
+    await refreshOwnerData();
+  }
   async function changeAdminPassword(oldPass, newPass) {
     if (newPass.length < 8) { showToast("Yangi parol kamida 8 belgi bo'lishi kerak"); return; }
     const { data, error } = await supabase.rpc("change_admin_password", { p_login: adminLogin, p_old_password: oldPass, p_new_password: newPass });
@@ -871,10 +932,12 @@ export default function BilliardPOS() {
         <HallsScreen
           user={currentUser} halls={halls} bar={bar}
           onCreateHall={createHall} onRenameHall={renameHall} onDeleteHall={deleteHall}
-          onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem}
+          onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem} onUpdateCost={updateMenuItemCost}
           onOpenHall={(id) => { setActiveHallId(id); setScreen("hall"); }}
           onLogout={handleLogout} onStats={() => setScreen("stats")}
           onWarehouse={() => setScreen("warehouse")} onDebts={() => setScreen("debts")}
+          onStaff={() => setScreen("staff")} onFinance={() => setScreen("finance")}
+          staffSalaries={staffSalaries} staffList={staffList} salaryPayments={salaryPayments} onMarkSalaryPaid={markSalaryPaid}
           onSupport={() => { markReadByUser(); setScreen("support"); }}
           unreadCount={userUnreadCount} onChangePassword={changeOwnPassword}
         />
@@ -892,6 +955,22 @@ export default function BilliardPOS() {
         <DebtsScreen
           debts={debts} debtPayments={debtPayments} debtTopups={debtTopups} onBack={() => setScreen("halls")}
           onAddDebt={addDebt} onPayDebt={payDebt} onAddToDebt={addToDebt} onToast={showToast}
+        />
+      )}
+
+      {screen === "staff" && currentUser && currentUser.role === "owner" && (
+        <StaffScreen
+          staffList={staffList} staffSalaries={staffSalaries} salaryPayments={salaryPayments}
+          onBack={() => setScreen("halls")}
+          onCreateStaff={createStaffAccount} onDeleteStaff={deleteStaffAccount} onSetSalary={setStaffSalary} onMarkSalaryPaid={markSalaryPaid}
+          onToast={showToast}
+        />
+      )}
+
+      {screen === "finance" && currentUser && currentUser.role === "owner" && (
+        <FinanceScreen
+          history={history} warehouseLogs={warehouseLogs} salaryPayments={salaryPayments}
+          onBack={() => setScreen("halls")}
         />
       )}
 
@@ -1122,7 +1201,7 @@ function SubscribeScreen({ user, plans, onPromo, onLogout }) {
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onSupport, unreadCount, onChangePassword }) {
+function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onStaff, onFinance, staffSalaries, staffList, salaryPayments, onMarkSalaryPaid, onSupport, unreadCount, onChangePassword }) {
   const [tab, setTab] = useState("halls");
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -1130,6 +1209,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
   const [editName, setEditName] = useState("");
   const [menuName, setMenuName] = useState("");
   const [menuPrice, setMenuPrice] = useState("");
+  const [menuCost, setMenuCost] = useState("");
   const [showPass, setShowPass] = useState(false);
   const [oldPass, setOldPass] = useState(""); const [newPass, setNewPass] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -1173,6 +1253,44 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         </div>
       </div>
       <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
+
+      {user.role === "owner" && (() => {
+        const today = new Date();
+        const period = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+        const due = staffSalaries.filter((s) => {
+          if (today.getDate() < s.payDay) return false;
+          return !salaryPayments.some((p) => p.salaryId === s.id && p.period === period);
+        });
+        if (due.length === 0) return null;
+        return (
+          <div style={{ background: "rgba(178,58,58,0.15)", border: "1px solid #b23a3a" }} className="rounded-xl p-3 mb-4">
+            <div className="text-xs font-semibold mb-1.5" style={{ color: "#ff8a8a" }}>🔔 Oylik berish vaqti keldi</div>
+            {due.map((s) => {
+              const staff = staffList.find((st) => st.id === s.staffId);
+              return (
+                <div key={s.id} className="flex items-center justify-between mb-1 last:mb-0">
+                  <span className="text-xs" style={{ color: CREAM }}>{staff ? staff.name : "?"} — {fmtMoney(s.amount)}</span>
+                  <button onClick={() => onMarkSalaryPaid(s.id, s.staffId, period, s.amount)}
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold" style={{ background: "#7bbf6a", color: FELT_DARK }}>
+                    Berdim
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {user.role === "owner" && (
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <button onClick={onStaff} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <Users size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Xodimlar</span>
+          </button>
+          <button onClick={onFinance} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <TrendingUp size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Moliya</span>
+          </button>
+        </div>
+      )}
 
       {user.betaAccess && (
         <div className="grid grid-cols-2 gap-3 mb-4">
@@ -1270,15 +1388,23 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         <div>
           <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
             <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi mahsulot qo'shish</div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 mb-2">
               <input value={menuName} onChange={(e) => setMenuName(e.target.value)} placeholder="Nomi, masalan Kola"
                 className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-              <input value={menuPrice} onChange={(e) => setMenuPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Narx"
-                className="w-24 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-              <button disabled={!menuName.trim() || !menuPrice}
-                onClick={() => { onAddMenuItem(menuName.trim(), Number(menuPrice)); setMenuName(""); setMenuPrice(""); }}
-                style={{ background: GOLD, color: FELT_DARK }} className="px-3 rounded-lg disabled:opacity-40"><Plus size={16} /></button>
+              <input value={menuPrice} onChange={(e) => setMenuPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Sotish narxi"
+                className="w-28 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
             </div>
+            {user.role === "owner" && (
+              <div className="flex gap-2 mb-2">
+                <input value={menuCost} onChange={(e) => setMenuCost(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Tannarx (ixtiyoriy)"
+                  className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+              </div>
+            )}
+            <button disabled={!menuName.trim() || !menuPrice}
+              onClick={() => { onAddMenuItem(menuName.trim(), Number(menuPrice), Number(menuCost) || 0); setMenuName(""); setMenuPrice(""); setMenuCost(""); }}
+              style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">
+              Qo'shish
+            </button>
           </div>
           <div className="grid grid-cols-2 gap-2">
             {bar.length === 0 && <p className="text-sm opacity-50 col-span-2" style={{ color: CREAM }}>Hali mahsulot yo'q</p>}
@@ -1289,6 +1415,17 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{item.name}</div>
                     <div className="text-xs font-mono" style={{ color: item.color }}>{fmtMoney(item.price)}</div>
+                    {user.role === "owner" && (
+                      <div className="flex items-center gap-1 mt-1">
+                        <span className="text-[10px]" style={{ color: "#8fa398" }}>Tannarx:</span>
+                        <input defaultValue={item.costPrice || ""} placeholder="0"
+                          onBlur={(e) => { if (Number(e.target.value) !== item.costPrice) onUpdateCost(item.id, e.target.value); }}
+                          className="w-16 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "#8fa398", border: `1px solid ${FELT_LIGHT}` }} />
+                        <span className="text-[10px]" style={{ color: item.price - item.costPrice >= 0 ? "#7bbf6a" : "#ff8a8a" }}>
+                          (+{fmtMoney(item.price - item.costPrice)})
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <button onClick={() => onDeleteMenuItem(item.id)}><Trash2 size={14} style={{ color: RED }} /></button>
@@ -1701,6 +1838,179 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
           </button>
         </Modal>
       )}
+    </div>
+  );
+}
+
+// ---------------- XODIMLAR ----------------
+function StaffScreen({ staffList, staffSalaries, salaryPayments, onBack, onCreateStaff, onDeleteStaff, onSetSalary, onMarkSalaryPaid, onToast }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
+  const [salaryEdit, setSalaryEdit] = useState(null); // staffId
+  const [salaryAmount, setSalaryAmount] = useState("");
+  const [salaryDay, setSalaryDay] = useState("");
+
+  const today = new Date();
+  const period = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+
+  return (
+    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
+        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><Users size={18} style={{ color: GOLD }} /> Xodimlar</h1>
+      </div>
+
+      <button onClick={() => { setShowAdd(true); setName(""); setPhone(""); setLogin(""); setPassword(""); }}
+        style={{ background: GOLD, color: FELT_DARK }} className="w-full mb-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
+        <UserPlus size={16} /> Yangi xodim
+      </button>
+
+      {staffList.length === 0 ? (
+        <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha xodim yo'q</p>
+      ) : (
+        <div className="space-y-3">
+          {staffList.map((s) => {
+            const salary = staffSalaries.find((sal) => sal.staffId === s.id);
+            const editing = salaryEdit === s.id;
+            const payments = salaryPayments.filter((p) => p.staffId === s.id);
+            const paidThisPeriod = salary && payments.some((p) => p.salaryId === salary.id && p.period === period);
+            return (
+              <div key={s.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-sm font-medium" style={{ color: CREAM }}>{s.name}</div>
+                  <button onClick={() => { if (confirm(`"${s.name}" akauntini o'chirasizmi?`)) onDeleteStaff(s.id); }}><Trash2 size={14} style={{ color: RED }} /></button>
+                </div>
+                <div className="text-xs mb-2" style={{ color: "#b8c9bf" }}>Login: {s.login}</div>
+
+                {salary && !editing && (
+                  <div className="flex items-center justify-between mb-2 px-3 py-2 rounded-lg" style={{ background: FELT_DARK }}>
+                    <span className="text-xs" style={{ color: CREAM }}>Oylik: {fmtMoney(salary.amount)} · har oyning {salary.payDay}-kunida</span>
+                    <button onClick={() => { setSalaryEdit(s.id); setSalaryAmount(String(salary.amount)); setSalaryDay(String(salary.payDay)); }}>
+                      <Pencil size={12} style={{ color: "#b8c9bf" }} />
+                    </button>
+                  </div>
+                )}
+
+                {editing ? (
+                  <div className="mb-2 space-y-2">
+                    <div className="flex gap-2">
+                      <input type="number" value={salaryAmount} onChange={(e) => setSalaryAmount(e.target.value)} placeholder="Summa"
+                        className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+                      <input type="number" value={salaryDay} onChange={(e) => setSalaryDay(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Kuni (1-31)"
+                        className="w-28 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+                    </div>
+                    <button disabled={!salaryAmount || !salaryDay || Number(salaryDay) < 1 || Number(salaryDay) > 31}
+                      onClick={() => { onSetSalary(s.id, salaryAmount, salaryDay); setSalaryEdit(null); }}
+                      className="w-full py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: GOLD, color: FELT_DARK }}>
+                      Saqlash
+                    </button>
+                  </div>
+                ) : !salary && (
+                  <button onClick={() => { setSalaryEdit(s.id); setSalaryAmount(""); setSalaryDay(""); }}
+                    className="w-full mb-2 py-2 rounded-lg text-xs font-medium" style={{ background: FELT_DARK, color: GOLD, border: `1px solid ${FELT_LIGHT}` }}>
+                    + Oylik belgilash
+                  </button>
+                )}
+
+                {salary && !editing && (
+                  <button disabled={paidThisPeriod} onClick={() => { onMarkSalaryPaid(salary.id, s.id, period, salary.amount); }}
+                    className="w-full py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: paidThisPeriod ? FELT_DARK : "#0e4a36", color: paidThisPeriod ? "#7bbf6a" : "#7bbf6a", border: "1px solid #7bbf6a" }}>
+                    {paidThisPeriod ? `✓ Shu oy uchun berilgan` : `Bu oy uchun "Berdim"`}
+                  </button>
+                )}
+
+                {payments.length > 0 && (
+                  <div className="mt-2 pl-2 border-l-2 space-y-0.5" style={{ borderColor: FELT_LIGHT }}>
+                    {payments.slice(0, 6).map((p) => (
+                      <div key={p.id} className="text-[11px]" style={{ color: "#8fa398" }}>{p.period} — {fmtMoney(p.amount)} berildi ({fmtDate(p.paidAt)})</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showAdd && (
+        <Modal onClose={() => setShowAdd(false)}>
+          <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Yangi xodim qo'shish</h2>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ismi" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefon raqami" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input value={login} onChange={(e) => setLogin(e.target.value)} placeholder="Login (u shu bilan kiradi)" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Parol (kamida 8 belgi)" className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <button disabled={!name.trim() || !login.trim() || password.length < 8}
+            onClick={() => { onCreateStaff(name, phone, login, password); setShowAdd(false); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Yaratish
+          </button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ---------------- MOLIYA ----------------
+function FinanceScreen({ history, warehouseLogs, salaryPayments, onBack }) {
+  const [tab, setTab] = useState("today");
+  const now = Date.now();
+  function inPeriod(ts) {
+    if (tab === "today") return isSameDay(ts, now);
+    if (tab === "week") return daysAgo(ts, 7);
+    return daysAgo(ts, 30);
+  }
+  const periodHistory = history.filter((h) => inPeriod(h.endTime));
+  const periodDirect = (warehouseLogs || []).filter((l) => l.type === "direct" && inPeriod(l.createdAt));
+  const periodSalaries = (salaryPayments || []).filter((p) => inPeriod(p.paidAt));
+
+  let gross = 0, costOfGoods = 0;
+  periodHistory.forEach((h) => {
+    gross += h.total;
+    costOfGoods += (h.extras || []).reduce((s, e) => s + (e.costPrice || 0), 0);
+  });
+  periodDirect.forEach((l) => {
+    const qty = -l.changeUnits;
+    gross += (l.sellPrice || 0) * qty;
+    costOfGoods += (l.costPrice || 0) * qty;
+  });
+  const salaryTotal = periodSalaries.reduce((s, p) => s + p.amount, 0);
+  const net = gross - costOfGoods - salaryTotal;
+
+  return (
+    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
+        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><TrendingUp size={18} style={{ color: GOLD }} /> Moliya</h1>
+      </div>
+
+      <div className="flex gap-2 mb-5">
+        <button onClick={() => setTab("today")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "today" ? GOLD : FELT, color: tab === "today" ? FELT_DARK : CREAM }}>Bugun</button>
+        <button onClick={() => setTab("week")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "week" ? GOLD : FELT, color: tab === "week" ? FELT_DARK : CREAM }}>7 kun</button>
+        <button onClick={() => setTab("month")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "month" ? GOLD : FELT, color: tab === "month" ? FELT_DARK : CREAM }}>30 kun</button>
+      </div>
+
+      <div className="space-y-2">
+        <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
+          <span className="text-sm" style={{ color: "#b8c9bf" }}>Umumiy tushum</span>
+          <span className="font-mono text-base font-semibold" style={{ color: CREAM }}>{fmtMoney(gross)}</span>
+        </div>
+        <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
+          <span className="text-sm" style={{ color: "#b8c9bf" }}>Mahsulot tannarxi</span>
+          <span className="font-mono text-base font-semibold" style={{ color: "#ff8a8a" }}>−{fmtMoney(costOfGoods)}</span>
+        </div>
+        <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
+          <span className="text-sm" style={{ color: "#b8c9bf" }}>Xodimlar oyligi (to'langan)</span>
+          <span className="font-mono text-base font-semibold" style={{ color: "#ff8a8a" }}>−{fmtMoney(salaryTotal)}</span>
+        </div>
+        <div style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
+          <span className="text-sm font-semibold" style={{ color: GOLD }}>Sof foyda</span>
+          <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(net)}</span>
+        </div>
+      </div>
+      <p className="text-xs mt-4 text-center opacity-60" style={{ color: CREAM }}>Hisob yopilgan stollar va sklad savdolari bo'yicha. Hozir ochiq turgan stollar yopilgach hisobga qo'shiladi.</p>
     </div>
   );
 }
