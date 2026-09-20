@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.6.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.6.1")
+const APP_VERSION = "1.6.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.6.2")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -2517,22 +2517,23 @@ function StatsScreen({ history, shifts, onBack }) {
   const rangeList = rangeActive ? filtered.filter((h) => h.endTime >= rangeStart && h.endTime <= rangeEnd) : [];
   const rangeSummary = summarize(rangeList);
 
-  // smena bo'yicha guruhlash
-  const shiftGroups = (() => {
-    if (!rangeActive) return [];
+  function groupByShift(list) {
     const sorted = [...(shifts || [])].sort((a, b) => b.openedAt - a.openedAt);
     const groups = []; const used = new Set();
     sorted.forEach((s) => {
-      const items = rangeList.filter((h) => h.endTime >= s.openedAt && (s.closedAt ? h.endTime <= s.closedAt : true));
+      const items = list.filter((h) => h.endTime >= s.openedAt && (s.closedAt ? h.endTime <= s.closedAt : true));
       if (items.length > 0) {
         groups.push({ key: s.id, label: `${fmtDate(s.openedAt)} · ${fmtTime(s.openedAt)}–${s.closedAt ? fmtTime(s.closedAt) : "hozirgacha"}`, items, total: items.reduce((sum, h) => sum + h.total, 0) });
         items.forEach((h) => used.add(h.id));
       }
     });
-    const rest = rangeList.filter((h) => !used.has(h.id));
+    const rest = list.filter((h) => !used.has(h.id));
     if (rest.length > 0) groups.push({ key: "none", label: "Smenaga bog'liq emas", items: rest, total: rest.reduce((sum, h) => sum + h.total, 0) });
     return groups;
-  })();
+  }
+  // smena bo'yicha guruhlash
+  const shiftGroups = rangeActive ? groupByShift(rangeList) : [];
+  const allShiftGroups = groupByShift(filtered);
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
@@ -2590,17 +2591,25 @@ function StatsScreen({ history, shifts, onBack }) {
       <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl overflow-hidden mb-2">
         <div className="text-center py-3 font-mono text-xs opacity-70" style={{ color: CREAM, borderBottom: `1px dashed ${FELT_LIGHT}` }}>UMUMIY CHEK — barcha yopilgan stollar</div>
         {filtered.length === 0 && <p className="text-sm opacity-50 text-center py-6" style={{ color: CREAM }}>Hali tarix yo'q</p>}
-        {filtered.map((h) => (
-          <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-5 py-3 text-left" style={{ borderBottom: `1px dashed ${FELT_LIGHT}` }}>
-            <div>
-              <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-              <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}{h.actorName ? ` · ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
+        {allShiftGroups.map((g) => (
+          <div key={g.key} className="pt-3">
+            <div className="flex justify-between items-center px-5 pb-2">
+              <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
+              <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
             </div>
-            <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
-          </button>
+            {g.items.map((h) => (
+              <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-5 py-3 text-left" style={{ borderTop: `1px dashed ${FELT_LIGHT}` }}>
+                <div>
+                  <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
+                  <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}{h.actorName ? ` · ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
+                </div>
+                <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
+              </button>
+            ))}
+          </div>
         ))}
         {filtered.length > 0 && (
-          <div className="flex justify-between items-baseline px-5 py-4" style={{ background: FELT_DARK }}>
+          <div className="flex justify-between items-baseline px-5 py-4 mt-2" style={{ background: FELT_DARK }}>
             <span className="font-display font-semibold" style={{ color: CREAM }}>Jami ({methodTab === "all" ? "hammasi" : methodTab})</span>
             <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(grandTotal)}</span>
           </div>
