@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.5.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.5.2")
+const APP_VERSION = "1.5.2"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.5.3")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -1447,7 +1447,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         const from = openShiftObj.openedAt;
         const periodHistory = (history || []).filter((h) => h.endTime >= from);
         const periodDirect = (warehouseLogs || []).filter((l) => l.type === "direct" && l.createdAt >= from);
-        const byMethod = { naqd: 0, karta: 0, click: 0, payme: 0 };
+        const byMethod = { naqd: 0, karta: 0 };
         let total = 0;
         periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.total; total += h.total; });
         periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; const amt = (l.sellPrice || 0) * -l.changeUnits; byMethod[m] = (byMethod[m] || 0) + amt; total += amt; });
@@ -1457,8 +1457,6 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
             <div className="space-y-2 mb-4">
               <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
               <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
-              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Click</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.click)}</span></div>
-              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Payme</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.payme)}</span></div>
               <div className="flex justify-between text-sm font-semibold pt-2 border-t" style={{ borderColor: FELT_LIGHT, color: GOLD }}><span>Jami</span><span className="font-mono">{fmtMoney(total)}</span></div>
             </div>
             <button onClick={() => { onCloseShift(openShiftObj.id); setShowShiftSummary(false); }} style={{ background: RED, color: "#fff" }} className="w-full py-3 rounded-xl font-semibold text-sm">
@@ -1661,8 +1659,8 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
           </div>
           <div className="mb-3">
             <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>To'lov turi</label>
-            <div className="grid grid-cols-4 gap-1.5">
-              {[["naqd", "Naqd"], ["karta", "Karta"], ["click", "Click"], ["payme", "Payme"]].map(([val, label]) => (
+            <div className="grid grid-cols-2 gap-1.5">
+              {[["naqd", "Naqd"], ["karta", "Karta"]].map(([val, label]) => (
                 <button key={val} onClick={() => setSellMethod(val)}
                   className="py-2 rounded-lg text-xs font-medium" style={{ background: sellMethod === val ? GOLD : FELT_DARK, color: sellMethod === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
                   {label}
@@ -1859,8 +1857,8 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
         <Modal onClose={() => setPayTarget(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{payTarget.name}" qarzini qoplash</h2>
           <p className="text-sm mb-3" style={{ color: "#b8c9bf" }}>Qoldiq qarz: {fmtMoney(payTarget.amount - payTarget.paidAmount)}</p>
-          <div className="grid grid-cols-4 gap-1.5 mb-3">
-            {[["naqd", "Naqd"], ["karta", "Karta"], ["click", "Click"], ["payme", "Payme"]].map(([val, label]) => (
+          <div className="grid grid-cols-2 gap-1.5 mb-3">
+            {[["naqd", "Naqd"], ["karta", "Karta"]].map(([val, label]) => (
               <button key={val} onClick={() => setPayMethod(val)}
                 className="py-2 rounded-lg text-xs font-medium" style={{ background: payMethod === val ? GOLD : FELT_DARK, color: payMethod === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
                 {label}
@@ -1919,7 +1917,7 @@ function FinanceScreen({ history, warehouseLogs, salaryPayments, onBack }) {
   });
   const salaryTotal = periodSalaries.reduce((s, p) => s + p.amount, 0);
   const net = gross - costOfGoods - salaryTotal;
-  const byMethod = { naqd: 0, karta: 0, click: 0, payme: 0 };
+  const byMethod = { naqd: 0, karta: 0 };
   periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.total; });
   periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + (l.sellPrice || 0) * -l.changeUnits; });
 
@@ -1941,8 +1939,6 @@ function FinanceScreen({ history, warehouseLogs, salaryPayments, onBack }) {
         <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
           <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
-          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Click</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.click)}</span></div>
-          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Payme</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.payme)}</span></div>
         </div>
       </div>
 
@@ -2393,8 +2389,8 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
             laps={receipt.laps} generalNote={receipt.generalNote} />
           <div className="mb-2">
             <div className="text-xs mb-1.5" style={{ color: "#b8c9bf" }}>To'lov turi</div>
-            <div className="grid grid-cols-4 gap-1.5">
-              {[["naqd", "Naqd"], ["karta", "Karta"], ["click", "Click"], ["payme", "Payme"]].map(([val, label]) => (
+            <div className="grid grid-cols-2 gap-1.5">
+              {[["naqd", "Naqd"], ["karta", "Karta"]].map(([val, label]) => (
                 <button key={val} onClick={() => setPaymentMethod(val)}
                   className="py-2 rounded-lg text-xs font-medium" style={{ background: paymentMethod === val ? GOLD : FELT_DARK, color: paymentMethod === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
                   {label}
