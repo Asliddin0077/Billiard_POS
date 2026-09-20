@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.7.2"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.3")
+const APP_VERSION = "1.7.3"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.4")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -921,14 +921,14 @@ export default function BilliardPOS() {
 
       {toast && (
         <div style={{ background: GOLD, color: FELT_DARK, top: "calc(var(--safe-top) + 16px)" }}
-          className="fixed left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full text-sm font-medium shadow-lg font-display max-w-[90vw] text-center">
+          className="fixed left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-full text-sm font-medium shadow-lg font-display max-w-[90vw] text-center">
           {toast}
         </div>
       )}
 
       {updateAvailable && (
-        <div style={{ background: "#0e4a36", border: `1px solid ${GOLD}`, top: "calc(var(--safe-top) + 16px)" }}
-          className="fixed left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-2xl shadow-lg flex items-center gap-2 max-w-[92vw]">
+        <div style={{ background: "#0e4a36", border: `1px solid ${GOLD}`, top: toast ? "calc(var(--safe-top) + 64px)" : "calc(var(--safe-top) + 16px)" }}
+          className="fixed left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-2xl shadow-lg flex items-center gap-2 max-w-[92vw] transition-[top]">
           <span className="text-xs font-medium" style={{ color: CREAM }}>🔔 Yangi versiya chiqdi</span>
           <button
             disabled={updating}
