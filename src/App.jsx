@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.7.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.1")
+const APP_VERSION = "1.7.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.2")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -60,6 +60,7 @@ function colorFor(name) {
 function canAccess(owner) {
   if (!owner) return false;
   if (owner.accountType === "vip") return true;
+  if (owner.subscriptionUntil) return owner.subscriptionUntil > Date.now();
   return !!owner.subscribed;
 }
 function isBanned(u) {
@@ -805,10 +806,17 @@ export default function BilliardPOS() {
   }
   async function toggleUserSub(userId) {
     const u = users.find((x) => x.id === userId);
-    const turningOff = u.subscribed;
-    await supabase.from("users").update(
-      turningOff ? { subscribed: false, subscription_until: null } : { subscribed: true }
-    ).eq("id", userId);
+    if (u.subscribed && u.subscriptionUntil && u.subscriptionUntil > Date.now()) {
+      // hozir obunasi faol — o'chirib qo'yamiz
+      await supabase.from("users").update({ subscribed: false, subscription_until: null }).eq("id", userId);
+    } else {
+      const daysStr = window.prompt(`"${u.name}" ga necha kunlik obuna berilsin?`, "30");
+      if (!daysStr) return;
+      const days = Number(daysStr);
+      if (!days || days <= 0) { showToast("❌ Noto'g'ri son kiritildi"); return; }
+      const newUntil = computeNewUntil(u.subscriptionUntil, days);
+      await supabase.from("users").update({ subscribed: true, subscription_until: new Date(newUntil).toISOString() }).eq("id", userId);
+    }
     await loadAdmin();
   }
   async function toggleVip(userId) {
@@ -997,7 +1005,7 @@ export default function BilliardPOS() {
           onTransfer={(tid, destHallId, destTableId) => transferTable(activeHallId, tid, destHallId, destTableId)}
           onAddExtrasBatch={(tid, items) => addExtrasBatch(activeHallId, tid, items)}
           onAddExtraTime={(tid, minutes) => addExtraTime(activeHallId, tid, minutes)}
-          onClose={(tid, record) => closeTable(activeHallId, tid, record)}
+          onClose={(tid, record, paymentMethod) => closeTable(activeHallId, tid, record, paymentMethod)}
           onUpdateNote={(tid, note) => updateTableNote(activeHallId, tid, note)}
           onAddLap={(tid, comment) => addLap(activeHallId, tid, comment)}
           onToast={showToast}
@@ -2823,7 +2831,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                 )}
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => onToggleSub(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
-                    {u.subscribed ? "Obunani o'chirish" : "Obuna berish"}
+                    {u.subscribed && u.subscriptionUntil && u.subscriptionUntil > Date.now() ? "Obunani o'chirish" : "Obuna berish (kunlab)"}
                   </button>
                   <button onClick={() => onToggleVip(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
                     {u.accountType === "vip" ? "Oddiyga o'tkazish" : "VIP qilish"}
