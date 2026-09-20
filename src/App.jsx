@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.6.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.6.2")
+const APP_VERSION = "1.7.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -715,9 +715,19 @@ export default function BilliardPOS() {
   async function closeTable(hallId, tableId, record, paymentMethod) {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
-    if (!table || table.status === "free") return; // allaqachon yopilgan — qayta yozmaymiz
-    const rate = table ? table.rate : 0;
-    const existingLaps = table ? table.laps : [];
+    if (!table) return;
+    // Avval atomik ravishda stolni "bo'sh" qilamiz — faqat hali "bo'sh" bo'lmagan bo'lsa.
+    // Ikki qurilma bir vaqtda bossa, faqat BITTASI muvaffaqiyatli bo'ladi (boshqasi 0 qator qaytaradi).
+    const flip = await supabase.from("billiard_tables").update({ status: "free", start_time: null, note: null })
+      .eq("id", tableId).neq("status", "free").select();
+    if (flip.error) { showToast(`❌ Xatolik: ${flip.error.message}`); return; }
+    if (!flip.data || flip.data.length === 0) {
+      showToast(`⚠️ Bu stol allaqachon yopilgan`);
+      await refreshOwnerData();
+      return;
+    }
+    const rate = table.rate;
+    const existingLaps = table.laps;
     const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
     const finalDuration = Math.max(0, (record.endTime - lastCheckpoint) / 1000);
     const finalLap = { start: lastCheckpoint, end: record.endTime, duration: finalDuration, comment: "", cost: (finalDuration / 3600) * rate };
@@ -735,7 +745,6 @@ export default function BilliardPOS() {
     });
     await supabase.from("table_extras").delete().eq("table_id", tableId);
     await supabase.from("table_laps").delete().eq("table_id", tableId);
-    await supabase.from("billiard_tables").update({ status: "free", start_time: null, note: null }).eq("id", tableId);
     await refreshOwnerData();
   }
 
@@ -995,7 +1004,7 @@ export default function BilliardPOS() {
         />
       )}
 
-      {screen === "stats" && currentUser && <StatsScreen history={history} shifts={shifts} onBack={() => setScreen("halls")} />}
+      {screen === "stats" && currentUser && <StatsScreen history={history} shifts={shifts} warehouseLogs={warehouseLogs} warehouseItems={warehouseItems} onBack={() => setScreen("halls")} />}
       {screen === "support" && currentUser && <SupportScreen messages={myChat} onSend={sendUserMessage} onBack={() => setScreen("halls")} />}
 
       {screen === "admin" && isAdmin && (
@@ -1564,7 +1573,7 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
                 <div>
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{wi ? wi.name : "?"}</div>
                   <div className="text-[11px]" style={{ color: "#b8c9bf" }}>
-                    {l.entryDate} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : "stolga sotildi"}{l.note ? ` · ${l.note}` : ""}{l.actorName ? ` · ${l.actorName}` : ""}
+                    {l.entryDate} {fmtTime(l.createdAt)} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : "stolga sotildi"}{l.note ? ` · ${l.note}` : ""}{l.actorName ? ` · ${l.actorName}` : ""}
                   </div>
                 </div>
                 <div className="text-sm font-semibold" style={{ color: l.changeUnits > 0 ? "#7fd99a" : "#ff8a8a" }}>
@@ -2496,13 +2505,29 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
 }
 
 // ---------------- STATS ----------------
-function StatsScreen({ history, shifts, onBack }) {
+function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack }) {
   const [selected, setSelected] = useState(null);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [methodTab, setMethodTab] = useState("all"); // all | naqd | karta
 
-  const filtered = methodTab === "all" ? history : history.filter((h) => (h.paymentMethod || "naqd") === methodTab);
+  const directEntries = (warehouseLogs || []).filter((l) => l.type === "direct").map((l) => {
+    const wi = (warehouseItems || []).find((w) => w.id === l.warehouseItemId);
+    const qty = -l.changeUnits;
+    const total = (l.sellPrice || 0) * qty;
+    const costTotal = (l.costPrice || 0) * qty;
+    const itemName = wi ? wi.name : "Mahsulot";
+    return {
+      id: `wl-${l.id}`, hallName: "Sklad", tableName: `${itemName} × ${qty}`,
+      startTime: l.createdAt, endTime: l.createdAt, duration: 0, tableCost: 0,
+      extras: [{ id: l.id, name: `${itemName} × ${qty}`, price: total, costPrice: costTotal }],
+      extrasCost: total, total, laps: [], generalNote: l.note || "",
+      actorName: l.actorName, paymentMethod: l.paymentMethod,
+    };
+  });
+  const combined = [...history, ...directEntries].sort((a, b) => b.endTime - a.endTime);
+
+  const filtered = methodTab === "all" ? combined : combined.filter((h) => (h.paymentMethod || "naqd") === methodTab);
 
   const today = filtered.filter((h) => isSameDay(h.endTime, Date.now()));
   const week = filtered.filter((h) => daysAgo(h.endTime, 7));
@@ -2559,7 +2584,7 @@ function StatsScreen({ history, shifts, onBack }) {
         {rangeActive && (
           <div className="mt-3">
             <div className="flex justify-between items-baseline mb-3 px-1">
-              <span className="text-sm" style={{ color: CREAM }}>{rangeSummary.count} ta stol yopilgan</span>
+              <span className="text-sm" style={{ color: CREAM }}>{rangeSummary.count} ta yozuv</span>
               <span className="font-mono text-base font-bold" style={{ color: GOLD }}>{fmtMoney(rangeSummary.total)}</span>
             </div>
             {shiftGroups.length === 0 && <p className="text-xs opacity-50 text-center py-3" style={{ color: CREAM }}>Shu oraliqda yopilgan stol yo'q</p>}
@@ -2631,7 +2656,7 @@ function PeriodCard({ label, s }) {
     <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3">
       <div className="text-[11px] mb-2" style={{ color: "#8fa398" }}>{label}</div>
       <div className="font-display text-lg font-bold mb-0.5" style={{ color: CREAM }}>{s.count}</div>
-      <div className="text-[10px] mb-1.5" style={{ color: "#8fa398" }}>stol yopilgan</div>
+      <div className="text-[10px] mb-1.5" style={{ color: "#8fa398" }}>savdo</div>
       <div className="font-mono text-xs font-semibold" style={{ color: GOLD }}>{fmtMoney(s.total)}</div>
     </div>
   );
