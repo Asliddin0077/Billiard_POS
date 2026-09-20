@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.5.3"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.5.4")
+const APP_VERSION = "1.6.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.6.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -970,7 +970,7 @@ export default function BilliardPOS() {
 
       {screen === "finance" && currentUser && (
         <FinanceScreen
-          history={history} warehouseLogs={warehouseLogs} salaryPayments={salaryPayments}
+          history={history} warehouseLogs={warehouseLogs}
           onBack={() => setScreen("halls")}
         />
       )}
@@ -995,7 +995,7 @@ export default function BilliardPOS() {
         />
       )}
 
-      {screen === "stats" && currentUser && <StatsScreen history={history} onBack={() => setScreen("halls")} />}
+      {screen === "stats" && currentUser && <StatsScreen history={history} shifts={shifts} onBack={() => setScreen("halls")} />}
       {screen === "support" && currentUser && <SupportScreen messages={myChat} onSend={sendUserMessage} onBack={() => setScreen("halls")} />}
 
       {screen === "admin" && isAdmin && (
@@ -1893,21 +1893,26 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
 }
 
 // ---------------- MOLIYA ----------------
-function FinanceScreen({ history, warehouseLogs, salaryPayments, onBack }) {
+function FinanceScreen({ history, warehouseLogs, onBack }) {
   const [tab, setTab] = useState("today");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const now = Date.now();
+  const customActive = fromDate && toDate;
+  const rangeStart = customActive ? new Date(fromDate + "T00:00:00").getTime() : null;
+  const rangeEnd = customActive ? new Date(toDate + "T23:59:59").getTime() : null;
   function inPeriod(ts) {
+    if (customActive) return ts >= rangeStart && ts <= rangeEnd;
     if (tab === "today") return isSameDay(ts, now);
     if (tab === "week") return daysAgo(ts, 7);
     return daysAgo(ts, 30);
   }
-  const periodHistory = history.filter((h) => inPeriod(h.endTime));
+  const periodHistory = history.filter((h) => inPeriod(h.endTime) && h.extras && h.extras.length > 0);
   const periodDirect = (warehouseLogs || []).filter((l) => l.type === "direct" && inPeriod(l.createdAt));
-  const periodSalaries = (salaryPayments || []).filter((p) => inPeriod(p.paidAt));
 
   let gross = 0, costOfGoods = 0;
   periodHistory.forEach((h) => {
-    gross += h.total;
+    gross += h.extrasCost;
     costOfGoods += (h.extras || []).reduce((s, e) => s + (e.costPrice || 0), 0);
   });
   periodDirect.forEach((l) => {
@@ -1915,23 +1920,31 @@ function FinanceScreen({ history, warehouseLogs, salaryPayments, onBack }) {
     gross += (l.sellPrice || 0) * qty;
     costOfGoods += (l.costPrice || 0) * qty;
   });
-  const salaryTotal = periodSalaries.reduce((s, p) => s + p.amount, 0);
-  const net = gross - costOfGoods - salaryTotal;
+  const net = gross - costOfGoods;
   const byMethod = { naqd: 0, karta: 0 };
-  periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.total; });
+  periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.extrasCost; });
   periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + (l.sellPrice || 0) * -l.changeUnits; });
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
       <div className="flex items-center gap-3 mb-6">
         <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
-        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><TrendingUp size={18} style={{ color: GOLD }} /> Moliya</h1>
+        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><TrendingUp size={18} style={{ color: GOLD }} /> Moliya — Bar</h1>
       </div>
 
-      <div className="flex gap-2 mb-5">
-        <button onClick={() => setTab("today")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "today" ? GOLD : FELT, color: tab === "today" ? FELT_DARK : CREAM }}>Bugun</button>
-        <button onClick={() => setTab("week")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "week" ? GOLD : FELT, color: tab === "week" ? FELT_DARK : CREAM }}>7 kun</button>
-        <button onClick={() => setTab("month")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "month" ? GOLD : FELT, color: tab === "month" ? FELT_DARK : CREAM }}>30 kun</button>
+      <div className="flex gap-2 mb-3">
+        <button onClick={() => { setTab("today"); setFromDate(""); setToDate(""); }} disabled={customActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !customActive && tab === "today" ? GOLD : FELT, color: !customActive && tab === "today" ? FELT_DARK : CREAM }}>Bugun</button>
+        <button onClick={() => { setTab("week"); setFromDate(""); setToDate(""); }} disabled={customActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !customActive && tab === "week" ? GOLD : FELT, color: !customActive && tab === "week" ? FELT_DARK : CREAM }}>7 kun</button>
+        <button onClick={() => { setTab("month"); setFromDate(""); setToDate(""); }} disabled={customActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !customActive && tab === "month" ? GOLD : FELT, color: !customActive && tab === "month" ? FELT_DARK : CREAM }}>30 kun</button>
+      </div>
+
+      <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 mb-5">
+        <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: "#8fa398" }}><CalendarRange size={13} /> Yoki aniq sana tanlang</div>
+        <div className="flex gap-2">
+          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          {customActive && <button onClick={() => { setFromDate(""); setToDate(""); }} className="px-3 rounded-lg text-xs" style={{ background: FELT_DARK, color: "#ff8a8a" }}>Tozalash</button>}
+        </div>
       </div>
 
       <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 mb-3">
@@ -1944,23 +1957,19 @@ function FinanceScreen({ history, warehouseLogs, salaryPayments, onBack }) {
 
       <div className="space-y-2">
         <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
-          <span className="text-sm" style={{ color: "#b8c9bf" }}>Umumiy tushum</span>
+          <span className="text-sm" style={{ color: "#b8c9bf" }}>Bar tushumi</span>
           <span className="font-mono text-base font-semibold" style={{ color: CREAM }}>{fmtMoney(gross)}</span>
         </div>
         <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
           <span className="text-sm" style={{ color: "#b8c9bf" }}>Mahsulot tannarxi</span>
           <span className="font-mono text-base font-semibold" style={{ color: "#ff8a8a" }}>−{fmtMoney(costOfGoods)}</span>
         </div>
-        <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
-          <span className="text-sm" style={{ color: "#b8c9bf" }}>Xodimlar oyligi (to'langan)</span>
-          <span className="font-mono text-base font-semibold" style={{ color: "#ff8a8a" }}>−{fmtMoney(salaryTotal)}</span>
-        </div>
         <div style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
-          <span className="text-sm font-semibold" style={{ color: GOLD }}>Sof foyda</span>
+          <span className="text-sm font-semibold" style={{ color: GOLD }}>Sof foyda (bar)</span>
           <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(net)}</span>
         </div>
       </div>
-      <p className="text-xs mt-4 text-center opacity-60" style={{ color: CREAM }}>Hisob yopilgan stollar va sklad savdolari bo'yicha. Hozir ochiq turgan stollar yopilgach hisobga qo'shiladi.</p>
+      <p className="text-xs mt-4 text-center opacity-60" style={{ color: CREAM }}>Faqat bar/sklad savdolari hisoblanadi — stol vaqti kirmaydi. Hozir ochiq turgan stollarning bari yopilgach hisobga qo'shiladi.</p>
     </div>
   );
 }
@@ -2487,27 +2496,54 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
 }
 
 // ---------------- STATS ----------------
-function StatsScreen({ history, onBack }) {
+function StatsScreen({ history, shifts, onBack }) {
   const [selected, setSelected] = useState(null);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const today = history.filter((h) => isSameDay(h.endTime, Date.now()));
-  const week = history.filter((h) => daysAgo(h.endTime, 7));
-  const month = history.filter((h) => daysAgo(h.endTime, 30));
+  const [methodTab, setMethodTab] = useState("all"); // all | naqd | karta
+
+  const filtered = methodTab === "all" ? history : history.filter((h) => (h.paymentMethod || "naqd") === methodTab);
+
+  const today = filtered.filter((h) => isSameDay(h.endTime, Date.now()));
+  const week = filtered.filter((h) => daysAgo(h.endTime, 7));
+  const month = filtered.filter((h) => daysAgo(h.endTime, 30));
   const summarize = (list) => ({ count: list.length, total: list.reduce((s, h) => s + h.total, 0) });
   const dS = summarize(today), wS = summarize(week), mS = summarize(month);
-  const grandTotal = history.reduce((s, h) => s + h.total, 0);
+  const grandTotal = filtered.reduce((s, h) => s + h.total, 0);
 
   const rangeActive = fromDate && toDate;
   const rangeStart = rangeActive ? new Date(fromDate + "T00:00:00").getTime() : null;
   const rangeEnd = rangeActive ? new Date(toDate + "T23:59:59").getTime() : null;
-  const rangeList = rangeActive ? history.filter((h) => h.endTime >= rangeStart && h.endTime <= rangeEnd) : [];
+  const rangeList = rangeActive ? filtered.filter((h) => h.endTime >= rangeStart && h.endTime <= rangeEnd) : [];
   const rangeSummary = summarize(rangeList);
+
+  // smena bo'yicha guruhlash
+  const shiftGroups = (() => {
+    if (!rangeActive) return [];
+    const sorted = [...(shifts || [])].sort((a, b) => b.openedAt - a.openedAt);
+    const groups = []; const used = new Set();
+    sorted.forEach((s) => {
+      const items = rangeList.filter((h) => h.endTime >= s.openedAt && (s.closedAt ? h.endTime <= s.closedAt : true));
+      if (items.length > 0) {
+        groups.push({ key: s.id, label: `${fmtDate(s.openedAt)} · ${fmtTime(s.openedAt)}–${s.closedAt ? fmtTime(s.closedAt) : "hozirgacha"}`, items, total: items.reduce((sum, h) => sum + h.total, 0) });
+        items.forEach((h) => used.add(h.id));
+      }
+    });
+    const rest = rangeList.filter((h) => !used.has(h.id));
+    if (rest.length > 0) groups.push({ key: "none", label: "Smenaga bog'liq emas", items: rest, total: rest.reduce((sum, h) => sum + h.total, 0) });
+    return groups;
+  })();
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
       <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
-      <h1 className="font-display text-2xl font-semibold mb-6" style={{ color: CREAM }}>Statistika</h1>
+      <h1 className="font-display text-2xl font-semibold mb-4" style={{ color: CREAM }}>Statistika</h1>
+
+      <div className="flex gap-2 mb-5">
+        <button onClick={() => setMethodTab("all")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: methodTab === "all" ? GOLD : FELT, color: methodTab === "all" ? FELT_DARK : CREAM }}>Umumiy</button>
+        <button onClick={() => setMethodTab("naqd")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: methodTab === "naqd" ? GOLD : FELT, color: methodTab === "naqd" ? FELT_DARK : CREAM }}>Naqd</button>
+        <button onClick={() => setMethodTab("karta")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: methodTab === "karta" ? GOLD : FELT, color: methodTab === "karta" ? FELT_DARK : CREAM }}>Karta</button>
+      </div>
 
       <div className="grid grid-cols-3 gap-2 mb-6">
         <PeriodCard label="Bugun" s={dS} /><PeriodCard label="7 kun" s={wS} /><PeriodCard label="30 kun" s={mS} />
@@ -2525,16 +2561,26 @@ function StatsScreen({ history, onBack }) {
               <span className="text-sm" style={{ color: CREAM }}>{rangeSummary.count} ta stol yopilgan</span>
               <span className="font-mono text-base font-bold" style={{ color: GOLD }}>{fmtMoney(rangeSummary.total)}</span>
             </div>
-            <div className="space-y-1.5 max-h-64 overflow-y-auto">
-              {rangeList.length === 0 && <p className="text-xs opacity-50 text-center py-3" style={{ color: CREAM }}>Shu oraliqda yopilgan stol yo'q</p>}
-              {rangeList.map((h) => (
-                <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-3 py-2.5 rounded-lg text-left" style={{ background: FELT_DARK }}>
-                  <div>
-                    <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-                    <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.actorName ? ` · ${h.actorName}` : ""}</div>
+            {shiftGroups.length === 0 && <p className="text-xs opacity-50 text-center py-3" style={{ color: CREAM }}>Shu oraliqda yopilgan stol yo'q</p>}
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {shiftGroups.map((g) => (
+                <div key={g.key}>
+                  <div className="flex justify-between items-center mb-1.5 px-1">
+                    <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
+                    <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
                   </div>
-                  <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
-                </button>
+                  <div className="space-y-1.5">
+                    {g.items.map((h) => (
+                      <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-3 py-2.5 rounded-lg text-left" style={{ background: FELT_DARK }}>
+                        <div>
+                          <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
+                          <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.actorName ? ` · ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
+                        </div>
+                        <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -2543,8 +2589,8 @@ function StatsScreen({ history, onBack }) {
 
       <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl overflow-hidden mb-2">
         <div className="text-center py-3 font-mono text-xs opacity-70" style={{ color: CREAM, borderBottom: `1px dashed ${FELT_LIGHT}` }}>UMUMIY CHEK — barcha yopilgan stollar</div>
-        {history.length === 0 && <p className="text-sm opacity-50 text-center py-6" style={{ color: CREAM }}>Hali tarix yo'q</p>}
-        {history.map((h) => (
+        {filtered.length === 0 && <p className="text-sm opacity-50 text-center py-6" style={{ color: CREAM }}>Hali tarix yo'q</p>}
+        {filtered.map((h) => (
           <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-5 py-3 text-left" style={{ borderBottom: `1px dashed ${FELT_LIGHT}` }}>
             <div>
               <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
@@ -2553,9 +2599,9 @@ function StatsScreen({ history, onBack }) {
             <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
           </button>
         ))}
-        {history.length > 0 && (
+        {filtered.length > 0 && (
           <div className="flex justify-between items-baseline px-5 py-4" style={{ background: FELT_DARK }}>
-            <span className="font-display font-semibold" style={{ color: CREAM }}>Jami (hammasi)</span>
+            <span className="font-display font-semibold" style={{ color: CREAM }}>Jami ({methodTab === "all" ? "hammasi" : methodTab})</span>
             <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(grandTotal)}</span>
           </div>
         )}
