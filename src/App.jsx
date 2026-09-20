@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.7.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.2")
+const APP_VERSION = "1.7.2"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.3")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -736,7 +736,7 @@ export default function BilliardPOS() {
       ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
       finalLap,
     ];
-    await supabase.from("session_history").insert({
+    const histRes = await supabase.from("session_history").insert({
       owner_id: ownerIdOf(currentUser), hall_name: hall ? hall.name : "", table_name: record.tableName,
       start_time: new Date(record.startTime).toISOString(), end_time: new Date(record.endTime).toISOString(),
       duration_seconds: record.duration, table_cost: record.tableCost,
@@ -744,6 +744,7 @@ export default function BilliardPOS() {
       laps: allLaps, general_note: (table && table.note) || null,
       actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
     });
+    if (histRes.error) { showToast(`❌ Hisobotga yozishda xatolik: ${histRes.error.message}`); }
     await supabase.from("table_extras").delete().eq("table_id", tableId);
     await supabase.from("table_laps").delete().eq("table_id", tableId);
     await refreshOwnerData();
