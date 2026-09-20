@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.5.2"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.5.3")
+const APP_VERSION = "1.5.3"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.5.4")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -1990,6 +1990,7 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
   const [cart, setCart] = useState({});
   const [addingCart, setAddingCart] = useState(false);
   const [extraTimeTable, setExtraTimeTable] = useState(null);
+  const [viewTable, setViewTable] = useState(null);
   const [extraMinutes, setExtraMinutes] = useState("");
 
   function playAlertSound() {
@@ -2078,6 +2079,10 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
                     <button type="button" onClick={() => { setExtraTimeTable(t); setExtraMinutes(""); }} title="Qo'shimcha vaqt qo'shish"
                       className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "#b8c9bf" }}>
                       <Plus size={11} />
+                    </button>
+                    <button type="button" onClick={() => setViewTable(t)} title="Hozirgi hisobni ko'rish"
+                      className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "#b8c9bf" }}>
+                      <FileText size={11} />
                     </button>
                   </div>
                   {playing && t.targetSeconds && (
@@ -2344,6 +2349,27 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
           </button>
         </Modal>
       )}
+
+      {viewTable && (() => {
+        const rate = viewTable.rate;
+        const existingLaps = viewTable.laps;
+        const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : viewTable.startTime;
+        const liveSeg = Math.max(0, (now - lastCheckpoint) / 1000);
+        const liveLaps = [
+          ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
+          { start: lastCheckpoint, end: now, duration: liveSeg, comment: "hozirgi, davom etmoqda", cost: (liveSeg / 3600) * rate },
+        ];
+        return (
+          <Modal onClose={() => setViewTable(null)}>
+            <p className="text-xs mb-2 px-2 py-1.5 rounded-lg text-center" style={{ background: "rgba(201,162,39,0.12)", color: GOLD }}>Stol yopilmadi — bu shunchaki hozirgi hisob</p>
+            <ReceiptView title={viewTable.name} start={viewTable.startTime} end={now}
+              duration={elapsedSeconds(viewTable)} tableCost={tableCost(viewTable)}
+              extras={viewTable.extras} extrasCost={extrasTotal(viewTable)}
+              laps={liveLaps} generalNote={viewTable.note} />
+            <button onClick={() => setViewTable(null)} className="w-full py-3 rounded-xl text-sm mt-2" style={{ background: FELT_DARK, color: CREAM }}>Yopish</button>
+          </Modal>
+        );
+      })()}
 
       {transferTable && (
         <Modal onClose={() => { setTransferTable(null); setTransferDest(null); }}>
