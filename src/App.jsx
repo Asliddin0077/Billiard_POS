@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.7.3"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.4")
+const APP_VERSION = "1.7.4"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.5")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -714,40 +714,51 @@ export default function BilliardPOS() {
     await refreshOwnerData();
   }
   async function closeTable(hallId, tableId, record, paymentMethod) {
-    const hall = halls.find((h) => h.id === hallId);
-    const table = hall && hall.tables.find((t) => t.id === tableId);
-    if (!table) return;
-    // Avval atomik ravishda stolni "bo'sh" qilamiz — faqat hali "bo'sh" bo'lmagan bo'lsa.
-    // Ikki qurilma bir vaqtda bossa, faqat BITTASI muvaffaqiyatli bo'ladi (boshqasi 0 qator qaytaradi).
-    const flip = await supabase.from("billiard_tables").update({ status: "free", start_time: null, note: null })
-      .eq("id", tableId).neq("status", "free").select();
-    if (flip.error) { showToast(`❌ Xatolik: ${flip.error.message}`); return; }
-    if (!flip.data || flip.data.length === 0) {
-      showToast(`⚠️ Bu stol allaqachon yopilgan`);
+    try {
+      const hall = halls.find((h) => h.id === hallId);
+      const table = hall && hall.tables.find((t) => t.id === tableId);
+      if (!table) { showToast(`❌ Stol topilmadi, sahifani yangilang`); return; }
+
+      // Avval atomik ravishda stolni "bo'sh" qilamiz — faqat hali "bo'sh" bo'lmagan bo'lsa.
+      // Ikki qurilma bir vaqtda bossa, faqat BITTASI muvaffaqiyatli bo'ladi (boshqasi 0 qator qaytaradi).
+      const flip = await supabase.from("billiard_tables").update({ status: "free", start_time: null, note: null })
+        .eq("id", tableId).neq("status", "free").select();
+      if (flip.error) { showToast(`❌ Xatolik: ${flip.error.message}`); return; }
+      if (!flip.data || flip.data.length === 0) {
+        showToast(`⚠️ Bu stol allaqachon yopilgan`);
+        await refreshOwnerData();
+        return;
+      }
+
+      const rate = table.rate;
+      const existingLaps = table.laps;
+      const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
+      const finalDuration = Math.max(0, (record.endTime - lastCheckpoint) / 1000);
+      const finalLap = { start: lastCheckpoint, end: record.endTime, duration: finalDuration, comment: "", cost: (finalDuration / 3600) * rate };
+      const allLaps = [
+        ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
+        finalLap,
+      ];
+
+      const histRes = await supabase.from("session_history").insert({
+        owner_id: ownerIdOf(currentUser), hall_name: hall ? hall.name : "", table_name: record.tableName,
+        start_time: new Date(record.startTime).toISOString(), end_time: new Date(record.endTime).toISOString(),
+        duration_seconds: record.duration, table_cost: record.tableCost,
+        extras: record.extras, extras_cost: record.extrasCost, total: record.total,
+        laps: allLaps, general_note: table.note || null,
+        actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
+      });
+      if (histRes.error) {
+        showToast(`❌ STOL BO'SHADI, LEKIN HISOBOTGA YOZILMADI: ${histRes.error.message} — DARHOL XABAR BERING, summa: ${fmtMoney(record.total)}`);
+        await refreshOwnerData();
+        return; // extras/laps ni o'chirmaymiz — tiklash imkoni qolsin
+      }
+      await supabase.from("table_extras").delete().eq("table_id", tableId);
+      await supabase.from("table_laps").delete().eq("table_id", tableId);
       await refreshOwnerData();
-      return;
+    } catch (e) {
+      showToast(`❌ Kutilmagan xatolik: ${e && e.message ? e.message : e}`);
     }
-    const rate = table.rate;
-    const existingLaps = table.laps;
-    const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
-    const finalDuration = Math.max(0, (record.endTime - lastCheckpoint) / 1000);
-    const finalLap = { start: lastCheckpoint, end: record.endTime, duration: finalDuration, comment: "", cost: (finalDuration / 3600) * rate };
-    const allLaps = [
-      ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
-      finalLap,
-    ];
-    const histRes = await supabase.from("session_history").insert({
-      owner_id: ownerIdOf(currentUser), hall_name: hall ? hall.name : "", table_name: record.tableName,
-      start_time: new Date(record.startTime).toISOString(), end_time: new Date(record.endTime).toISOString(),
-      duration_seconds: record.duration, table_cost: record.tableCost,
-      extras: record.extras, extras_cost: record.extrasCost, total: record.total,
-      laps: allLaps, general_note: (table && table.note) || null,
-      actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
-    });
-    if (histRes.error) { showToast(`❌ Hisobotga yozishda xatolik: ${histRes.error.message}`); }
-    await supabase.from("table_extras").delete().eq("table_id", tableId);
-    await supabase.from("table_laps").delete().eq("table_id", tableId);
-    await refreshOwnerData();
   }
 
   // ---- bar ----
