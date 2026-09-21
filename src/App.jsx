@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.7.4"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.5")
+const APP_VERSION = "1.7.5"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.6")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -391,6 +391,15 @@ export default function BilliardPOS() {
     const od = await fetchOwnerData(ownerId || ownerIdOf(currentUser));
     setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
   }
+  // Hisobot ekranlariga (Statistika, Moliya, Sklad, Qarz) kirganda har safar bazadan yangi ma'lumot olib kelamiz —
+  // shunda eskirgan holat (masalan boshqa qurilmadan qilingan o'zgarish) doim to'g'ri ko'rinadi.
+  useEffect(() => {
+    if (!currentUser) return;
+    if (["stats", "finance", "warehouse", "debts", "halls"].includes(screen)) {
+      refreshOwnerData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
   async function refreshMyChat() {
     const { data } = await supabase.from("chats").select("*").eq("owner_id", ownerIdOf(currentUser)).order("created_at");
     setMyChat((data || []).map(mapChat));
