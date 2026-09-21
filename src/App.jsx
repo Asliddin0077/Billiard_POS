@@ -3,7 +3,7 @@ import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
   Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
-  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight, Boxes, Wallet, Minus
+  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight, Boxes, Wallet, Minus, TrendingUp
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.1.2"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.3.1")
+const APP_VERSION = "1.2.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.4")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -60,6 +60,7 @@ function colorFor(name) {
 function canAccess(owner) {
   if (!owner) return false;
   if (owner.accountType === "vip") return true;
+  if (owner.subscriptionUntil) return owner.subscriptionUntil > Date.now();
   return !!owner.subscribed;
 }
 function isBanned(u) {
@@ -81,8 +82,10 @@ function mapUser(row) {
     banned: row.banned, banUntil: row.ban_until ? new Date(row.ban_until).getTime() : null,
     banReason: row.ban_reason || "", createdAt: new Date(row.created_at).getTime(),
     subscriptionUntil: row.subscription_until ? new Date(row.subscription_until).getTime() : null,
+    role: row.role || "owner", parentOwnerId: row.parent_owner_id || null,
   };
 }
+function ownerIdOf(u) { return u ? u.id : null; }
 function mapLap(row) {
   return { id: row.id, start: new Date(row.lap_start).getTime(), end: new Date(row.lap_end).getTime(), duration: Number(row.duration_seconds), comment: row.comment || "" };
 }
@@ -95,7 +98,7 @@ function mapTable(row) {
     prepaidAmount: row.prepaid_amount != null ? Number(row.prepaid_amount) : null,
     pausedAt: row.paused_at ? new Date(row.paused_at).getTime() : null,
     pausedSeconds: row.paused_seconds != null ? Number(row.paused_seconds) : 0,
-    extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price) })),
+    extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price), costPrice: Number(e.cost_price || 0) })),
     laps: (row.table_laps || []).map(mapLap).sort((a, b) => a.end - b.end),
   };
 }
@@ -109,43 +112,58 @@ function stableTableOrder(tables) {
   });
 }
 function mapHall(row) { return { id: row.id, name: row.name, tables: stableTableOrder((row.billiard_tables || []).map(mapTable)) }; }
-function mapBarItem(row) { return { id: row.id, name: row.name, price: Number(row.price), emoji: row.emoji, color: row.color }; }
+function mapBarItem(row) { return { id: row.id, name: row.name, price: Number(row.price), costPrice: Number(row.cost_price || 0), emoji: row.emoji, color: row.color }; }
 function mapHistory(row) {
   return {
     id: row.id, hallName: row.hall_name, tableName: row.table_name,
     startTime: new Date(row.start_time).getTime(), endTime: new Date(row.end_time).getTime(),
     duration: Number(row.duration_seconds), tableCost: Number(row.table_cost),
-    extras: (row.extras || []).map((e) => ({ ...e, price: Number(e.price) })),
+    extras: (row.extras || []).map((e) => ({ ...e, price: Number(e.price), costPrice: Number(e.costPrice || 0) })),
     extrasCost: Number(row.extras_cost), total: Number(row.total),
     laps: (row.laps || []).map((l) => ({ ...l, cost: Number(l.cost || 0) })),
     generalNote: row.general_note || "",
+    actorName: row.actor_name || "", paymentMethod: row.payment_method || "",
   };
 }
 function mapPromo(row) { return { code: row.code, durationDays: row.duration_days || 30, used: row.used, usedBy: row.used_by }; }
 function mapChat(row) { return { id: row.id, ownerId: row.owner_id, from: row.from_role, text: row.message, broadcast: row.broadcast, readByAdmin: row.read_by_admin, readByUser: row.read_by_user, ts: new Date(row.created_at).getTime() }; }
 function mapAdmin(row) { return { login: row.login, name: row.name, createdAt: new Date(row.created_at).getTime() }; }
 function mapPlan(row) { return { id: row.id, label: row.label, months: Number(row.months), days: row.days, price: Number(row.price), active: row.active }; }
-function mapWarehouseItem(row) { return { id: row.id, barItemId: row.bar_item_id, name: row.name, units: Number(row.units_in_stock || 0) }; }
+function mapWarehouseItem(row) { return { id: row.id, barItemId: row.bar_item_id, name: row.name, units: Number(row.units_in_stock || 0), lowStockThreshold: Number(row.low_stock_threshold != null ? row.low_stock_threshold : 5) }; }
 function mapWarehouseLog(row) {
   return { id: row.id, warehouseItemId: row.warehouse_item_id, changeUnits: Number(row.change_units), type: row.type,
     blocks: row.blocks != null ? Number(row.blocks) : null, unitsPerBlock: row.units_per_block != null ? Number(row.units_per_block) : null,
-    note: row.note || "", entryDate: row.entry_date, createdAt: new Date(row.created_at).getTime() };
+    costPrice: row.cost_price != null ? Number(row.cost_price) : null, sellPrice: row.sell_price != null ? Number(row.sell_price) : null,
+    note: row.note || "", entryDate: row.entry_date, createdAt: new Date(row.created_at).getTime(),
+    actorName: row.actor_name || "", paymentMethod: row.payment_method || "" };
 }
 function mapDebt(row) {
   return { id: row.id, name: row.debtor_name, phone: row.debtor_phone || "", amount: Number(row.amount), paidAmount: Number(row.paid_amount || 0),
     debtDate: row.debt_date, dueDate: row.due_date, note: row.note || "", status: row.status,
-    createdAt: new Date(row.created_at).getTime(), closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null };
+    createdAt: new Date(row.created_at).getTime(), closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null,
+    actorName: row.actor_name || "" };
 }
 function mapDebtPayment(row) {
-  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime() };
+  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime(),
+    actorName: row.actor_name || "", paymentMethod: row.payment_method || "" };
 }
 function mapDebtTopup(row) {
-  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), note: row.note || "", addedAt: new Date(row.added_at).getTime() };
+  return { id: row.id, debtId: row.debt_id, amount: Number(row.amount), note: row.note || "", addedAt: new Date(row.added_at).getTime(), actorName: row.actor_name || "" };
+}
+function mapStaffSalary(row) {
+  return { id: row.id, staffId: row.staff_id, amount: Number(row.amount), payDay: Number(row.pay_day) };
+}
+function mapSalaryPayment(row) {
+  return { id: row.id, salaryId: row.salary_id, staffId: row.staff_id, period: row.period, amount: Number(row.amount), paidAt: new Date(row.paid_at).getTime(), actorName: row.actor_name || "" };
+}
+function mapShift(row) {
+  return { id: row.id, openedBy: row.opened_by, openedByName: row.opened_by_name, openedAt: new Date(row.opened_at).getTime(),
+    closedBy: row.closed_by, closedByName: row.closed_by_name, closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null, status: row.status };
 }
 
 // ---------------- data fetch helpers ----------------
 async function fetchOwnerData(ownerId) {
-  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes] = await Promise.all([
+  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes, staffRes, salariesRes, salaryPayRes, shiftsRes] = await Promise.all([
     supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" }),
     supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
@@ -155,6 +173,10 @@ async function fetchOwnerData(ownerId) {
     supabase.from("debts").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }),
     supabase.from("debt_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
     supabase.from("debt_topups").select("*").eq("owner_id", ownerId).order("added_at", { ascending: false }),
+    supabase.from("users").select("*").eq("parent_owner_id", ownerId).eq("role", "staff").order("created_at"),
+    supabase.from("staff_salaries").select("*").eq("owner_id", ownerId),
+    supabase.from("salary_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
+    supabase.from("shifts").select("*").eq("owner_id", ownerId).order("opened_at", { ascending: false }).limit(60),
   ]);
   return {
     halls: (hallsRes.data || []).map(mapHall),
@@ -166,6 +188,10 @@ async function fetchOwnerData(ownerId) {
     debts: (debtsRes.data || []).map(mapDebt),
     debtPayments: (debtPayRes.data || []).map(mapDebtPayment),
     debtTopups: (debtTopupRes.data || []).map(mapDebtTopup),
+    staffList: (staffRes.data || []).map(mapUser),
+    staffSalaries: (salariesRes.data || []).map(mapStaffSalary),
+    salaryPayments: (salaryPayRes.data || []).map(mapSalaryPayment),
+    shifts: (shiftsRes.data || []).map(mapShift),
   };
 }
 async function fetchAdminData() {
@@ -245,6 +271,10 @@ export default function BilliardPOS() {
   const [debts, setDebts] = useState([]);
   const [debtPayments, setDebtPayments] = useState([]);
   const [debtTopups, setDebtTopups] = useState([]);
+  const [staffList, setStaffList] = useState([]);
+  const [staffSalaries, setStaffSalaries] = useState([]);
+  const [salaryPayments, setSalaryPayments] = useState([]);
+  const [shifts, setShifts] = useState([]);
   const [history, setHistory] = useState([]);
   const [myChat, setMyChat] = useState([]);
 
@@ -288,7 +318,7 @@ export default function BilliardPOS() {
                 if (isBanned(u)) { setScreen("banned"); }
                 else {
                   const od = await fetchOwnerData(u.id);
-                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups);
+                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
                   setScreen(canAccess(u) ? "halls" : "subscribe");
                 }
               }
@@ -309,7 +339,7 @@ export default function BilliardPOS() {
       if (data && data.active_session_token && data.active_session_token !== sessionToken) {
         localStorage.removeItem(SESSION_KEY);
         setCurrentUser(null); setSessionToken(null);
-        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]);
+        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
         setScreen("auth");
         showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
       }
@@ -358,11 +388,11 @@ export default function BilliardPOS() {
   const adminUnreadUserCount = users.filter((u) => (chatsByUser[u.id] || []).some((m) => m.from === "user" && !m.readByAdmin)).length;
 
   async function refreshOwnerData(ownerId) {
-    const od = await fetchOwnerData(ownerId || currentUser.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups);
+    const od = await fetchOwnerData(ownerId || ownerIdOf(currentUser));
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
   }
   async function refreshMyChat() {
-    const { data } = await supabase.from("chats").select("*").eq("owner_id", currentUser.id).order("created_at");
+    const { data } = await supabase.from("chats").select("*").eq("owner_id", ownerIdOf(currentUser)).order("created_at");
     setMyChat((data || []).map(mapChat));
   }
   async function loadAdmin() {
@@ -381,7 +411,7 @@ export default function BilliardPOS() {
     const token = crypto.randomUUID();
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     try { localStorage.setItem(`billiard-pos-newuser-${u.id}`, "1"); } catch (e) {}
-    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]);
+    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
     persistSession({ userId: u.id, isAdmin: false, token });
     setScreen("subscribe");
   }
@@ -426,14 +456,14 @@ export default function BilliardPOS() {
     persistSession({ userId: u.id, isAdmin: false, token });
     if (isBanned(u)) { setScreen("banned"); return; }
     const od = await fetchOwnerData(u.id);
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
     setScreen(canAccess(u) ? "halls" : "subscribe");
   }
 
   function handleLogout() {
     persistSession({ userId: null, isAdmin: false });
     setCurrentUser(null); setSessionToken(null); setIsAdmin(false); setAdminLogin(null);
-    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]);
+    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
     setUsers([]); setPromoCodes([]); setAdminAccounts([]); setChatsByUser({});
     setActiveHallId(null); setScreen("auth");
   }
@@ -453,7 +483,7 @@ export default function BilliardPOS() {
   // To'lov endi Telegram bot orqali (@Billiard_pos_bot) - admin qo'lda faollashtiradi
 
   // ---- halls/tables ----
-  async function createHall(name) { await supabase.from("halls").insert({ owner_id: currentUser.id, name }); await refreshOwnerData(); }
+  async function createHall(name) { await supabase.from("halls").insert({ owner_id: ownerIdOf(currentUser), name }); await refreshOwnerData(); }
   async function renameHall(hallId, name) { await supabase.from("halls").update({ name }).eq("id", hallId); await refreshOwnerData(); }
   async function deleteHall(hallId) { await supabase.from("halls").delete().eq("id", hallId); await refreshOwnerData(); }
   async function createTable(hallId, name, rate) {
@@ -528,7 +558,7 @@ export default function BilliardPOS() {
       await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
       await supabase.from("warehouse_items").update({ units_in_stock: wi.units - 1 }).eq("id", wi.id);
       await supabase.from("warehouse_logs").insert({
-        warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -1, type: "sale",
+        warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -1, type: "sale",
         note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
       });
     } else {
@@ -540,21 +570,24 @@ export default function BilliardPOS() {
   async function addExtrasBatch(hallId, tableId, items) {
     for (const item of items) {
       if (!item || item.qty <= 0) continue;
+      const barItem = item.barItemId ? bar.find((b) => b.id === item.barItemId) : null;
+      const costPrice = barItem ? barItem.costPrice : 0;
       if (item.barItemId && currentUser && currentUser.betaAccess) {
         const wi = warehouseItems.find((w) => w.barItemId === item.barItemId);
         if (!wi || wi.units < item.qty) {
           showToast(`❌ Skladda "${item.name}" yetarli emas (${wi ? wi.units : 0} dona bor)`);
           continue;
         }
-        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price }));
+        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price, cost_price: costPrice }));
         await supabase.from("table_extras").insert(rows);
         await supabase.from("warehouse_items").update({ units_in_stock: wi.units - item.qty }).eq("id", wi.id);
         await supabase.from("warehouse_logs").insert({
-          warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -item.qty, type: "sale",
-          note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
+          warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -item.qty, type: "sale",
+          cost_price: costPrice, sell_price: item.price, note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
+          actor_id: currentUser.id, actor_name: currentUser.name,
         });
       } else {
-        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price }));
+        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price, cost_price: costPrice }));
         await supabase.from("table_extras").insert(rows);
       }
     }
@@ -566,7 +599,7 @@ export default function BilliardPOS() {
     let wi = warehouseItems.find((w) => w.barItemId === barItemId);
     if (!wi) {
       const { data, error } = await supabase.from("warehouse_items").insert({
-        owner_id: currentUser.id, bar_item_id: barItemId, name, units_in_stock: 0,
+        owner_id: ownerIdOf(currentUser), bar_item_id: barItemId, name, units_in_stock: 0,
       }).select().single();
       if (error) { showToast(`❌ Xatolik: ${error.message}`); return; }
       wi = mapWarehouseItem(data);
@@ -574,10 +607,15 @@ export default function BilliardPOS() {
     const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units + units }).eq("id", wi.id);
     if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
     const r2 = await supabase.from("warehouse_logs").insert({
-      warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: units, type: "add",
+      warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: units, type: "add",
       blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: entryDate,
+      actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
+    await refreshOwnerData();
+  }
+  async function setLowStockThreshold(warehouseItemId, threshold) {
+    await supabase.from("warehouse_items").update({ low_stock_threshold: Number(threshold) || 0 }).eq("id", warehouseItemId);
     await refreshOwnerData();
   }
   async function removeStock(warehouseItemId, blocks, unitsPerBlock, note) {
@@ -588,36 +626,41 @@ export default function BilliardPOS() {
     const r1 = await supabase.from("warehouse_items").update({ units_in_stock: Math.max(0, wi.units - units) }).eq("id", wi.id);
     if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
     const r2 = await supabase.from("warehouse_logs").insert({
-      warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -units, type: "remove",
+      warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -units, type: "remove",
       blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: new Date().toISOString().slice(0, 10),
+      actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
-  async function sellDirect(warehouseItemId, quantity, note) {
+  async function sellDirect(warehouseItemId, quantity, note, paymentMethod) {
     const wi = warehouseItems.find((w) => w.id === warehouseItemId);
     if (!wi) return;
     const units = Number(quantity) || 0;
     if (units <= 0) return;
     if (units > wi.units) { showToast(`❌ Skladda faqat ${wi.units} dona bor`); return; }
+    const barItem = wi.barItemId ? bar.find((b) => b.id === wi.barItemId) : null;
     const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units - units }).eq("id", wi.id);
     if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
     const r2 = await supabase.from("warehouse_logs").insert({
-      warehouse_item_id: wi.id, owner_id: currentUser.id, change_units: -units, type: "direct",
+      warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -units, type: "direct",
+      cost_price: barItem ? barItem.costPrice : null, sell_price: barItem ? barItem.price : null,
       note: note || "", entry_date: new Date().toISOString().slice(0, 10),
+      actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
   async function addDebt(name, phone, amount, debtDate, dueDate, note) {
     const r = await supabase.from("debts").insert({
-      owner_id: currentUser.id, debtor_name: name, debtor_phone: phone || null, amount: Number(amount),
+      owner_id: ownerIdOf(currentUser), debtor_name: name, debtor_phone: phone || null, amount: Number(amount),
       debt_date: debtDate, due_date: dueDate || null, note: note || null,
+      actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     await refreshOwnerData();
   }
-  async function payDebt(debtId, payAmount) {
+  async function payDebt(debtId, payAmount, paymentMethod) {
     const d = debts.find((x) => x.id === debtId);
     if (!d) return;
     const remaining = d.amount - d.paidAmount;
@@ -629,7 +672,10 @@ export default function BilliardPOS() {
       paid_amount: newPaid, status: closed ? "closed" : "open", closed_at: closed ? new Date().toISOString() : null,
     }).eq("id", debtId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
-    const r2 = await supabase.from("debt_payments").insert({ debt_id: debtId, owner_id: currentUser.id, amount: applied });
+    const r2 = await supabase.from("debt_payments").insert({
+      debt_id: debtId, owner_id: ownerIdOf(currentUser), amount: applied,
+      actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
+    });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
@@ -643,7 +689,10 @@ export default function BilliardPOS() {
       amount: newAmount, status: "open", closed_at: null,
     }).eq("id", debtId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
-    const r2 = await supabase.from("debt_topups").insert({ debt_id: debtId, owner_id: currentUser.id, amount: add, note: note || null });
+    const r2 = await supabase.from("debt_topups").insert({
+      debt_id: debtId, owner_id: ownerIdOf(currentUser), amount: add, note: note || null,
+      actor_id: currentUser.id, actor_name: currentUser.name,
+    });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
     await refreshOwnerData();
   }
@@ -664,12 +713,22 @@ export default function BilliardPOS() {
     });
     await refreshOwnerData();
   }
-  async function closeTable(hallId, tableId, record) {
+  async function closeTable(hallId, tableId, record, paymentMethod) {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
-    if (!table || table.status === "free") return; // allaqachon yopilgan — qayta yozmaymiz
-    const rate = table ? table.rate : 0;
-    const existingLaps = table ? table.laps : [];
+    if (!table) return;
+    // Avval atomik ravishda stolni "bo'sh" qilamiz — faqat hali "bo'sh" bo'lmagan bo'lsa.
+    // Ikki qurilma bir vaqtda bossa, faqat BITTASI muvaffaqiyatli bo'ladi (boshqasi 0 qator qaytaradi).
+    const flip = await supabase.from("billiard_tables").update({ status: "free", start_time: null, note: null })
+      .eq("id", tableId).neq("status", "free").select();
+    if (flip.error) { showToast(`❌ Xatolik: ${flip.error.message}`); return; }
+    if (!flip.data || flip.data.length === 0) {
+      showToast(`⚠️ Bu stol allaqachon yopilgan`);
+      await refreshOwnerData();
+      return;
+    }
+    const rate = table.rate;
+    const existingLaps = table.laps;
     const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
     const finalDuration = Math.max(0, (record.endTime - lastCheckpoint) / 1000);
     const finalLap = { start: lastCheckpoint, end: record.endTime, duration: finalDuration, comment: "", cost: (finalDuration / 3600) * rate };
@@ -677,33 +736,38 @@ export default function BilliardPOS() {
       ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
       finalLap,
     ];
-    await supabase.from("session_history").insert({
-      owner_id: currentUser.id, hall_name: hall ? hall.name : "", table_name: record.tableName,
+    const histRes = await supabase.from("session_history").insert({
+      owner_id: ownerIdOf(currentUser), hall_name: hall ? hall.name : "", table_name: record.tableName,
       start_time: new Date(record.startTime).toISOString(), end_time: new Date(record.endTime).toISOString(),
       duration_seconds: record.duration, table_cost: record.tableCost,
       extras: record.extras, extras_cost: record.extrasCost, total: record.total,
       laps: allLaps, general_note: (table && table.note) || null,
+      actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
     });
+    if (histRes.error) { showToast(`❌ Hisobotga yozishda xatolik: ${histRes.error.message}`); }
     await supabase.from("table_extras").delete().eq("table_id", tableId);
     await supabase.from("table_laps").delete().eq("table_id", tableId);
-    await supabase.from("billiard_tables").update({ status: "free", start_time: null, note: null }).eq("id", tableId);
     await refreshOwnerData();
   }
 
   // ---- bar ----
-  async function addMenuItem(name, price) {
-    await supabase.from("bar_items").insert({ owner_id: currentUser.id, name, price, emoji: guessEmoji(name), color: colorFor(name) });
+  async function addMenuItem(name, price, costPrice) {
+    await supabase.from("bar_items").insert({ owner_id: ownerIdOf(currentUser), name, price, cost_price: Number(costPrice) || 0, emoji: guessEmoji(name), color: colorFor(name) });
+    await refreshOwnerData();
+  }
+  async function updateMenuItemCost(itemId, costPrice) {
+    await supabase.from("bar_items").update({ cost_price: Number(costPrice) || 0 }).eq("id", itemId);
     await refreshOwnerData();
   }
   async function deleteMenuItem(itemId) { await supabase.from("bar_items").delete().eq("id", itemId); await refreshOwnerData(); }
 
   // ---- chat (user side) ----
   async function sendUserMessage(text) {
-    await supabase.from("chats").insert({ owner_id: currentUser.id, from_role: "user", message: text, read_by_admin: false, read_by_user: true });
+    await supabase.from("chats").insert({ owner_id: ownerIdOf(currentUser), from_role: "user", message: text, read_by_admin: false, read_by_user: true });
     await refreshMyChat();
   }
   async function markReadByUser() {
-    await supabase.from("chats").update({ read_by_user: true }).eq("owner_id", currentUser.id).eq("from_role", "admin").eq("read_by_user", false);
+    await supabase.from("chats").update({ read_by_user: true }).eq("owner_id", ownerIdOf(currentUser)).eq("from_role", "admin").eq("read_by_user", false);
     await refreshMyChat();
   }
 
@@ -743,10 +807,17 @@ export default function BilliardPOS() {
   }
   async function toggleUserSub(userId) {
     const u = users.find((x) => x.id === userId);
-    const turningOff = u.subscribed;
-    await supabase.from("users").update(
-      turningOff ? { subscribed: false, subscription_until: null } : { subscribed: true }
-    ).eq("id", userId);
+    if (u.subscribed && u.subscriptionUntil && u.subscriptionUntil > Date.now()) {
+      // hozir obunasi faol — o'chirib qo'yamiz
+      await supabase.from("users").update({ subscribed: false, subscription_until: null }).eq("id", userId);
+    } else {
+      const daysStr = window.prompt(`"${u.name}" ga necha kunlik obuna berilsin?`, "30");
+      if (!daysStr) return;
+      const days = Number(daysStr);
+      if (!days || days <= 0) { showToast("❌ Noto'g'ri son kiritildi"); return; }
+      const newUntil = computeNewUntil(u.subscriptionUntil, days);
+      await supabase.from("users").update({ subscribed: true, subscription_until: new Date(newUntil).toISOString() }).eq("id", userId);
+    }
     await loadAdmin();
   }
   async function toggleVip(userId) {
@@ -787,6 +858,23 @@ export default function BilliardPOS() {
     const { data, error } = await supabase.rpc("change_user_password", { p_user_id: currentUser.id, p_old_password: oldPass, p_new_password: newPass });
     if (error || !data) { showToast("Eski parol noto'g'ri"); return; }
     showToast("Parol muvaffaqiyatli yangilandi");
+  }
+  // ---- smena ----
+  async function openShift() {
+    const r = await supabase.from("shifts").insert({
+      owner_id: ownerIdOf(currentUser), opened_by: currentUser.id, opened_by_name: currentUser.name,
+    });
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    showToast(`✅ Smena ochildi`);
+    await refreshOwnerData();
+  }
+  async function closeShift(shiftId) {
+    const r = await supabase.from("shifts").update({
+      status: "closed", closed_by: currentUser.id, closed_by_name: currentUser.name, closed_at: new Date().toISOString(),
+    }).eq("id", shiftId);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    showToast(`✅ Smena yopildi`);
+    await refreshOwnerData();
   }
   async function changeAdminPassword(oldPass, newPass) {
     if (newPass.length < 8) { showToast("Yangi parol kamida 8 belgi bo'lishi kerak"); return; }
@@ -833,14 +921,14 @@ export default function BilliardPOS() {
 
       {toast && (
         <div style={{ background: GOLD, color: FELT_DARK, top: "calc(var(--safe-top) + 16px)" }}
-          className="fixed left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full text-sm font-medium shadow-lg font-display max-w-[90vw] text-center">
+          className="fixed left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-full text-sm font-medium shadow-lg font-display max-w-[90vw] text-center">
           {toast}
         </div>
       )}
 
       {updateAvailable && (
-        <div style={{ background: "#0e4a36", border: `1px solid ${GOLD}`, top: "calc(var(--safe-top) + 16px)" }}
-          className="fixed left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-2xl shadow-lg flex items-center gap-2 max-w-[92vw]">
+        <div style={{ background: "#0e4a36", border: `1px solid ${GOLD}`, top: toast ? "calc(var(--safe-top) + 64px)" : "calc(var(--safe-top) + 16px)" }}
+          className="fixed left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-2xl shadow-lg flex items-center gap-2 max-w-[92vw] transition-[top]">
           <span className="text-xs font-medium" style={{ color: CREAM }}>🔔 Yangi versiya chiqdi</span>
           <button
             disabled={updating}
@@ -871,10 +959,13 @@ export default function BilliardPOS() {
         <HallsScreen
           user={currentUser} halls={halls} bar={bar}
           onCreateHall={createHall} onRenameHall={renameHall} onDeleteHall={deleteHall}
-          onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem}
+          onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem} onUpdateCost={updateMenuItemCost}
           onOpenHall={(id) => { setActiveHallId(id); setScreen("hall"); }}
           onLogout={handleLogout} onStats={() => setScreen("stats")}
           onWarehouse={() => setScreen("warehouse")} onDebts={() => setScreen("debts")}
+          onFinance={() => setScreen("finance")}
+          shifts={shifts} onOpenShift={openShift} onCloseShift={closeShift}
+          history={history} warehouseLogs={warehouseLogs}
           onSupport={() => { markReadByUser(); setScreen("support"); }}
           unreadCount={userUnreadCount} onChangePassword={changeOwnPassword}
         />
@@ -884,7 +975,7 @@ export default function BilliardPOS() {
         <WarehouseScreen
           bar={bar} warehouseItems={warehouseItems} warehouseLogs={warehouseLogs}
           onBack={() => setScreen("halls")}
-          onAddStock={addStock} onRemoveStock={removeStock} onDirectSale={sellDirect} onToast={showToast}
+          onAddStock={addStock} onRemoveStock={removeStock} onDirectSale={sellDirect} onSetThreshold={setLowStockThreshold} onToast={showToast}
         />
       )}
 
@@ -892,6 +983,13 @@ export default function BilliardPOS() {
         <DebtsScreen
           debts={debts} debtPayments={debtPayments} debtTopups={debtTopups} onBack={() => setScreen("halls")}
           onAddDebt={addDebt} onPayDebt={payDebt} onAddToDebt={addToDebt} onToast={showToast}
+        />
+      )}
+
+      {screen === "finance" && currentUser && (
+        <FinanceScreen
+          history={history} warehouseLogs={warehouseLogs}
+          onBack={() => setScreen("halls")}
         />
       )}
 
@@ -908,14 +1006,14 @@ export default function BilliardPOS() {
           onTransfer={(tid, destHallId, destTableId) => transferTable(activeHallId, tid, destHallId, destTableId)}
           onAddExtrasBatch={(tid, items) => addExtrasBatch(activeHallId, tid, items)}
           onAddExtraTime={(tid, minutes) => addExtraTime(activeHallId, tid, minutes)}
-          onClose={(tid, record) => closeTable(activeHallId, tid, record)}
+          onClose={(tid, record, paymentMethod) => closeTable(activeHallId, tid, record, paymentMethod)}
           onUpdateNote={(tid, note) => updateTableNote(activeHallId, tid, note)}
           onAddLap={(tid, comment) => addLap(activeHallId, tid, comment)}
           onToast={showToast}
         />
       )}
 
-      {screen === "stats" && currentUser && <StatsScreen history={history} onBack={() => setScreen("halls")} />}
+      {screen === "stats" && currentUser && <StatsScreen history={history} shifts={shifts} warehouseLogs={warehouseLogs} warehouseItems={warehouseItems} onBack={() => setScreen("halls")} />}
       {screen === "support" && currentUser && <SupportScreen messages={myChat} onSend={sendUserMessage} onBack={() => setScreen("halls")} />}
 
       {screen === "admin" && isAdmin && (
@@ -1122,7 +1220,7 @@ function SubscribeScreen({ user, plans, onPromo, onLogout }) {
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onSupport, unreadCount, onChangePassword }) {
+function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onFinance, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword }) {
   const [tab, setTab] = useState("halls");
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -1130,6 +1228,8 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
   const [editName, setEditName] = useState("");
   const [menuName, setMenuName] = useState("");
   const [menuPrice, setMenuPrice] = useState("");
+  const [menuCost, setMenuCost] = useState("");
+  const [showShiftSummary, setShowShiftSummary] = useState(false);
   const [showPass, setShowPass] = useState(false);
   const [oldPass, setOldPass] = useState(""); const [newPass, setNewPass] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -1173,6 +1273,32 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         </div>
       </div>
       <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
+
+      {(() => {
+        const openShiftObj = (shifts || []).find((s) => s.status === "open");
+        return (
+          <div style={{ background: FELT, border: `1px solid ${openShiftObj ? "#7bbf6a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 mb-4 flex items-center justify-between">
+            {openShiftObj ? (
+              <>
+                <div>
+                  <div className="text-xs font-semibold flex items-center gap-1" style={{ color: "#7bbf6a" }}>🟢 Smena ochiq</div>
+                  <div className="text-[11px] mt-0.5" style={{ color: "#b8c9bf" }}>{openShiftObj.openedByName} · {fmtDate(openShiftObj.openedAt)} dan beri</div>
+                </div>
+                <button onClick={() => setShowShiftSummary(true)} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: RED, color: "#fff" }}>Yopish</button>
+              </>
+            ) : (
+              <>
+                <div className="text-xs" style={{ color: "#b8c9bf" }}>Smena ochilmagan</div>
+                <button onClick={onOpenShift} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Smena ochish</button>
+              </>
+            )}
+          </div>
+        );
+      })()}
+
+      <button onClick={onFinance} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="w-full mb-4 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+        <TrendingUp size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Moliya</span>
+      </button>
 
       {user.betaAccess && (
         <div className="grid grid-cols-2 gap-3 mb-4">
@@ -1270,15 +1396,21 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         <div>
           <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
             <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi mahsulot qo'shish</div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 mb-2">
               <input value={menuName} onChange={(e) => setMenuName(e.target.value)} placeholder="Nomi, masalan Kola"
                 className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-              <input value={menuPrice} onChange={(e) => setMenuPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Narx"
-                className="w-24 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-              <button disabled={!menuName.trim() || !menuPrice}
-                onClick={() => { onAddMenuItem(menuName.trim(), Number(menuPrice)); setMenuName(""); setMenuPrice(""); }}
-                style={{ background: GOLD, color: FELT_DARK }} className="px-3 rounded-lg disabled:opacity-40"><Plus size={16} /></button>
+              <input value={menuPrice} onChange={(e) => setMenuPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Sotish narxi"
+                className="w-28 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
             </div>
+            <div className="flex gap-2 mb-2">
+              <input value={menuCost} onChange={(e) => setMenuCost(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Tannarx (ixtiyoriy)"
+                className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+            </div>
+            <button disabled={!menuName.trim() || !menuPrice}
+              onClick={() => { onAddMenuItem(menuName.trim(), Number(menuPrice), Number(menuCost) || 0); setMenuName(""); setMenuPrice(""); setMenuCost(""); }}
+              style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">
+              Qo'shish
+            </button>
           </div>
           <div className="grid grid-cols-2 gap-2">
             {bar.length === 0 && <p className="text-sm opacity-50 col-span-2" style={{ color: CREAM }}>Hali mahsulot yo'q</p>}
@@ -1289,6 +1421,15 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{item.name}</div>
                     <div className="text-xs font-mono" style={{ color: item.color }}>{fmtMoney(item.price)}</div>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-[10px]" style={{ color: "#8fa398" }}>Tannarx:</span>
+                      <input defaultValue={item.costPrice || ""} placeholder="0"
+                        onBlur={(e) => { if (Number(e.target.value) !== item.costPrice) onUpdateCost(item.id, e.target.value); }}
+                        className="w-16 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "#8fa398", border: `1px solid ${FELT_LIGHT}` }} />
+                      <span className="text-[10px]" style={{ color: item.price - item.costPrice >= 0 ? "#7bbf6a" : "#ff8a8a" }}>
+                        (+{fmtMoney(item.price - item.costPrice)})
+                      </span>
+                    </div>
                   </div>
                 </div>
                 <button onClick={() => onDeleteMenuItem(item.id)}><Trash2 size={14} style={{ color: RED }} /></button>
@@ -1317,12 +1458,37 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
             className="w-full py-3 rounded-xl font-semibold text-sm">Saqlash</button>
         </Modal>
       )}
+
+      {showShiftSummary && (() => {
+        const openShiftObj = (shifts || []).find((s) => s.status === "open");
+        if (!openShiftObj) { setShowShiftSummary(false); return null; }
+        const from = openShiftObj.openedAt;
+        const periodHistory = (history || []).filter((h) => h.endTime >= from);
+        const periodDirect = (warehouseLogs || []).filter((l) => l.type === "direct" && l.createdAt >= from);
+        const byMethod = { naqd: 0, karta: 0 };
+        let total = 0;
+        periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.total; total += h.total; });
+        periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; const amt = (l.sellPrice || 0) * -l.changeUnits; byMethod[m] = (byMethod[m] || 0) + amt; total += amt; });
+        return (
+          <Modal onClose={() => setShowShiftSummary(false)}>
+            <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Smenani yopish</h2>
+            <div className="space-y-2 mb-4">
+              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
+              <div className="flex justify-between text-sm font-semibold pt-2 border-t" style={{ borderColor: FELT_LIGHT, color: GOLD }}><span>Jami</span><span className="font-mono">{fmtMoney(total)}</span></div>
+            </div>
+            <button onClick={() => { onCloseShift(openShiftObj.id); setShowShiftSummary(false); }} style={{ background: RED, color: "#fff" }} className="w-full py-3 rounded-xl font-semibold text-sm">
+              Smenani yopish
+            </button>
+          </Modal>
+        );
+      })()}
     </div>
   );
 }
 
 // ---------------- SKLAD ----------------
-function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStock, onRemoveStock, onDirectSale, onToast }) {
+function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStock, onRemoveStock, onDirectSale, onSetThreshold, onToast }) {
   const [tab, setTab] = useState("stock"); // stock | report
   const [showAdd, setShowAdd] = useState(false);
   const [pickedBarItem, setPickedBarItem] = useState(null);
@@ -1337,8 +1503,10 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
   const [sellItem, setSellItem] = useState(null);
   const [sellQty, setSellQty] = useState("");
   const [sellNote, setSellNote] = useState("");
+  const [sellMethod, setSellMethod] = useState("naqd");
 
   function itemLog(id) { return warehouseLogs.filter((l) => l.warehouseItemId === id); }
+  const lowItems = warehouseItems.filter((w) => w.units <= w.lowStockThreshold);
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
@@ -1346,6 +1514,15 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
         <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
         <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><Boxes size={18} style={{ color: GOLD }} /> Sklad</h1>
       </div>
+
+      {lowItems.length > 0 && (
+        <div style={{ background: "rgba(178,58,58,0.15)", border: "1px solid #b23a3a" }} className="rounded-xl p-3 mb-4">
+          <div className="text-xs font-semibold mb-1" style={{ color: "#ff8a8a" }}>⚠️ Kam qolgan tovarlar</div>
+          {lowItems.map((w) => (
+            <div key={w.id} className="text-xs" style={{ color: CREAM }}>{w.name} — {w.units} dona qoldi</div>
+          ))}
+        </div>
+      )}
 
       <div className="flex gap-2 mb-5">
         <button onClick={() => setTab("stock")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "stock" ? GOLD : FELT, color: tab === "stock" ? FELT_DARK : CREAM }}>Qoldiq</button>
@@ -1363,14 +1540,21 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
             <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha sklad bo'sh</p>
           ) : (
             <div className="space-y-2">
-              {warehouseItems.map((w) => (
-                <div key={w.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 flex items-center justify-between gap-2">
+              {warehouseItems.map((w) => {
+                const low = w.units <= w.lowStockThreshold;
+                return (
+                <div key={w.id} style={{ background: FELT, border: `1px solid ${low ? "#b23a3a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{w.name}</div>
-                    <div className="text-xs" style={{ color: "#b8c9bf" }}>{w.units} dona qoldi</div>
+                    <div className="text-xs" style={{ color: low ? "#ff8a8a" : "#b8c9bf" }}>{w.units} dona qoldi</div>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-[10px]" style={{ color: "#8fa398" }}>Kam qolish chegarasi:</span>
+                      <input defaultValue={w.lowStockThreshold} onBlur={(e) => { if (Number(e.target.value) !== w.lowStockThreshold) onSetThreshold(w.id, e.target.value); }}
+                        className="w-12 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "#8fa398", border: `1px solid ${FELT_LIGHT}` }} />
+                    </div>
                   </div>
                   <div className="flex gap-1.5 shrink-0">
-                    <button onClick={() => { setSellItem(w); setSellQty(""); setSellNote(""); }}
+                    <button onClick={() => { setSellItem(w); setSellQty(""); setSellNote(""); setSellMethod("naqd"); }}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1" style={{ background: "#0e4a36", color: "#7fd99a" }}>
                       Sotish
                     </button>
@@ -1380,7 +1564,8 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </>
@@ -1397,7 +1582,7 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
                 <div>
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{wi ? wi.name : "?"}</div>
                   <div className="text-[11px]" style={{ color: "#b8c9bf" }}>
-                    {l.entryDate} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : "stolga sotildi"}{l.note ? ` · ${l.note}` : ""}
+                    {l.entryDate} {fmtTime(l.createdAt)} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : "stolga sotildi"}{l.note ? ` · ${l.note}` : ""}{l.actorName ? ` · ${l.actorName}` : ""}
                   </div>
                 </div>
                 <div className="text-sm font-semibold" style={{ color: l.changeUnits > 0 ? "#7fd99a" : "#ff8a8a" }}>
@@ -1490,11 +1675,22 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
             <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha dona</label>
             <input type="number" value={sellQty} onChange={(e) => setSellQty(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
+          <div className="mb-3">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>To'lov turi</label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {[["naqd", "Naqd"], ["karta", "Karta"]].map(([val, label]) => (
+                <button key={val} onClick={() => setSellMethod(val)}
+                  className="py-2 rounded-lg text-xs font-medium" style={{ background: sellMethod === val ? GOLD : FELT_DARK, color: sellMethod === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <textarea value={sellNote} onChange={(e) => setSellNote(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy)"
             className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <button disabled={!sellQty || Number(sellQty) <= 0}
             onClick={() => {
-              onDirectSale(sellItem.id, sellQty, sellNote.trim());
+              onDirectSale(sellItem.id, sellQty, sellNote.trim(), sellMethod);
               onToast(`✅ ${sellItem.name} sotildi`);
               setSellItem(null);
             }}
@@ -1519,6 +1715,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
   const [note, setNote] = useState("");
   const [payTarget, setPayTarget] = useState(null);
   const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState("naqd");
   const [topupTarget, setTopupTarget] = useState(null);
   const [topupAmount, setTopupAmount] = useState("");
   const [topupNote, setTopupNote] = useState("");
@@ -1565,8 +1762,8 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
                 const payments = (debtPayments || []).filter((p) => p.debtId === d.id);
                 const topups = (debtTopups || []).filter((t) => t.debtId === d.id);
                 const timeline = [
-                  ...payments.map((p) => ({ id: `p-${p.id}`, at: p.paidAt, text: `− ${fmtMoney(p.amount)} to'landi` })),
-                  ...topups.map((t) => ({ id: `t-${t.id}`, at: t.addedAt, text: `+ ${fmtMoney(t.amount)} qarz qo'shildi${t.note ? ` (${t.note})` : ""}` })),
+                  ...payments.map((p) => ({ id: `p-${p.id}`, at: p.paidAt, text: `− ${fmtMoney(p.amount)} to'landi (${p.paymentMethod || "naqd"})${p.actorName ? ` · ${p.actorName}` : ""}` })),
+                  ...topups.map((t) => ({ id: `t-${t.id}`, at: t.addedAt, text: `+ ${fmtMoney(t.amount)} qarz qo'shildi${t.note ? ` (${t.note})` : ""}${t.actorName ? ` · ${t.actorName}` : ""}` })),
                 ].sort((a, b) => a.at - b.at);
                 return (
                   <div key={d.id} style={{ background: FELT, border: `1px solid ${overdue ? "#b23a3a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5">
@@ -1576,7 +1773,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
                     </div>
                     {d.phone && <div className="text-xs mb-0.5" style={{ color: "#b8c9bf" }}>📞 {d.phone}</div>}
                     <div className="text-xs mb-1" style={{ color: "#b8c9bf" }}>
-                      {d.debtDate} dan{d.dueDate ? ` · qaytarish: ${d.dueDate}` : ""} · jami: {fmtMoney(d.amount)}{d.paidAmount > 0 ? ` · ${fmtMoney(d.paidAmount)} to'langan` : ""}
+                      {d.debtDate} dan{d.dueDate ? ` · qaytarish: ${d.dueDate}` : ""} · jami: {fmtMoney(d.amount)}{d.paidAmount > 0 ? ` · ${fmtMoney(d.paidAmount)} to'langan` : ""}{d.actorName ? ` · yozgan: ${d.actorName}` : ""}
                     </div>
                     {d.note && <div className="text-xs mb-2" style={{ color: "#b8c9bf" }}>💬 {d.note}</div>}
                     {timeline.length > 0 && (
@@ -1677,8 +1874,16 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
       {payTarget && (
         <Modal onClose={() => setPayTarget(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{payTarget.name}" qarzini qoplash</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Qoldiq qarz: {fmtMoney(payTarget.amount - payTarget.paidAmount)}</p>
-          <button onClick={() => { onPayDebt(payTarget.id, null); onToast(`✅ Qarz to'liq yopildi`); setPayTarget(null); }}
+          <p className="text-sm mb-3" style={{ color: "#b8c9bf" }}>Qoldiq qarz: {fmtMoney(payTarget.amount - payTarget.paidAmount)}</p>
+          <div className="grid grid-cols-2 gap-1.5 mb-3">
+            {[["naqd", "Naqd"], ["karta", "Karta"]].map(([val, label]) => (
+              <button key={val} onClick={() => setPayMethod(val)}
+                className="py-2 rounded-lg text-xs font-medium" style={{ background: payMethod === val ? GOLD : FELT_DARK, color: payMethod === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => { onPayDebt(payTarget.id, null, payMethod); onToast(`✅ Qarz to'liq yopildi`); setPayTarget(null); }}
             style={{ background: "#0e4a36", color: "#7fd99a", border: "1px solid #7fd99a" }} className="w-full mb-3 py-3 rounded-xl font-semibold text-sm">
             Umumiy qarzni to'liq yopish
           </button>
@@ -1695,12 +1900,94 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
             </p>
           )}
           <button disabled={!payAmount || Number(payAmount) <= 0}
-            onClick={() => { onPayDebt(payTarget.id, payAmount); onToast(`✅ To'lov qabul qilindi`); setPayTarget(null); }}
+            onClick={() => { onPayDebt(payTarget.id, payAmount, payMethod); onToast(`✅ To'lov qabul qilindi`); setPayTarget(null); }}
             style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
             Kiritish
           </button>
         </Modal>
       )}
+    </div>
+  );
+}
+
+// ---------------- MOLIYA ----------------
+function FinanceScreen({ history, warehouseLogs, onBack }) {
+  const [tab, setTab] = useState("today");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const now = Date.now();
+  const customActive = fromDate && toDate;
+  const rangeStart = customActive ? new Date(fromDate + "T00:00:00").getTime() : null;
+  const rangeEnd = customActive ? new Date(toDate + "T23:59:59").getTime() : null;
+  function inPeriod(ts) {
+    if (customActive) return ts >= rangeStart && ts <= rangeEnd;
+    if (tab === "today") return isSameDay(ts, now);
+    if (tab === "week") return daysAgo(ts, 7);
+    return daysAgo(ts, 30);
+  }
+  const periodHistory = history.filter((h) => inPeriod(h.endTime) && h.extras && h.extras.length > 0);
+  const periodDirect = (warehouseLogs || []).filter((l) => l.type === "direct" && inPeriod(l.createdAt));
+
+  let gross = 0, costOfGoods = 0;
+  periodHistory.forEach((h) => {
+    gross += h.extrasCost;
+    costOfGoods += (h.extras || []).reduce((s, e) => s + (e.costPrice || 0), 0);
+  });
+  periodDirect.forEach((l) => {
+    const qty = -l.changeUnits;
+    gross += (l.sellPrice || 0) * qty;
+    costOfGoods += (l.costPrice || 0) * qty;
+  });
+  const net = gross - costOfGoods;
+  const byMethod = { naqd: 0, karta: 0 };
+  periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.extrasCost; });
+  periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + (l.sellPrice || 0) * -l.changeUnits; });
+
+  return (
+    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
+        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><TrendingUp size={18} style={{ color: GOLD }} /> Moliya — Bar</h1>
+      </div>
+
+      <div className="flex gap-2 mb-3">
+        <button onClick={() => { setTab("today"); setFromDate(""); setToDate(""); }} disabled={customActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !customActive && tab === "today" ? GOLD : FELT, color: !customActive && tab === "today" ? FELT_DARK : CREAM }}>Bugun</button>
+        <button onClick={() => { setTab("week"); setFromDate(""); setToDate(""); }} disabled={customActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !customActive && tab === "week" ? GOLD : FELT, color: !customActive && tab === "week" ? FELT_DARK : CREAM }}>7 kun</button>
+        <button onClick={() => { setTab("month"); setFromDate(""); setToDate(""); }} disabled={customActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !customActive && tab === "month" ? GOLD : FELT, color: !customActive && tab === "month" ? FELT_DARK : CREAM }}>30 kun</button>
+      </div>
+
+      <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 mb-5">
+        <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: "#8fa398" }}><CalendarRange size={13} /> Yoki aniq sana tanlang</div>
+        <div className="flex gap-2">
+          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          {customActive && <button onClick={() => { setFromDate(""); setToDate(""); }} className="px-3 rounded-lg text-xs" style={{ background: FELT_DARK, color: "#ff8a8a" }}>Tozalash</button>}
+        </div>
+      </div>
+
+      <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 mb-3">
+        <div className="text-xs mb-2" style={{ color: "#8fa398" }}>To'lov turi bo'yicha</div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
+          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
+          <span className="text-sm" style={{ color: "#b8c9bf" }}>Bar tushumi</span>
+          <span className="font-mono text-base font-semibold" style={{ color: CREAM }}>{fmtMoney(gross)}</span>
+        </div>
+        <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
+          <span className="text-sm" style={{ color: "#b8c9bf" }}>Mahsulot tannarxi</span>
+          <span className="font-mono text-base font-semibold" style={{ color: "#ff8a8a" }}>−{fmtMoney(costOfGoods)}</span>
+        </div>
+        <div style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
+          <span className="text-sm font-semibold" style={{ color: GOLD }}>Sof foyda (bar)</span>
+          <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(net)}</span>
+        </div>
+      </div>
+      <p className="text-xs mt-4 text-center opacity-60" style={{ color: CREAM }}>Faqat bar/sklad savdolari hisoblanadi — stol vaqti kirmaydi. Hozir ochiq turgan stollarning bari yopilgach hisobga qo'shiladi.</p>
     </div>
   );
 }
@@ -1719,6 +2006,7 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
   const [confirmClose, setConfirmClose] = useState(null);
   const [receipt, setReceipt] = useState(null);
   const [closing, setClosing] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState("naqd");
   const [noteTable, setNoteTable] = useState(null);
   const [noteText, setNoteText] = useState("");
   const [lapTable, setLapTable] = useState(null);
@@ -1729,6 +2017,7 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
   const [cart, setCart] = useState({});
   const [addingCart, setAddingCart] = useState(false);
   const [extraTimeTable, setExtraTimeTable] = useState(null);
+  const [viewTable, setViewTable] = useState(null);
   const [extraMinutes, setExtraMinutes] = useState("");
 
   function playAlertSound() {
@@ -1817,6 +2106,10 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
                     <button type="button" onClick={() => { setExtraTimeTable(t); setExtraMinutes(""); }} title="Qo'shimcha vaqt qo'shish"
                       className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "#b8c9bf" }}>
                       <Plus size={11} />
+                    </button>
+                    <button type="button" onClick={() => setViewTable(t)} title="Hozirgi hisobni ko'rish"
+                      className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "#b8c9bf" }}>
+                      <FileText size={11} />
                     </button>
                   </div>
                   {playing && t.targetSeconds && (
@@ -2047,7 +2340,18 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
       {lapTable && (
         <Modal onClose={() => setLapTable(null)}>
           <h2 className="font-display text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: CREAM }}><Flag size={17} /> {lapTable.name} — znak qo'yish</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Hozirgi segment (oxirgi znakdan yoki boshlanishdan hozirgacha) alohida yozib qo'yiladi, stol yopilmaydi.</p>
+          <p className="text-sm mb-2" style={{ color: "#b8c9bf" }}>Hozirgi segment (oxirgi znakdan yoki boshlanishdan hozirgacha) alohida yozib qo'yiladi, stol yopilmaydi.</p>
+          {(() => {
+            const lastEnd = lapTable.laps.length > 0 ? Math.max(...lapTable.laps.map((l) => l.end)) : lapTable.startTime;
+            const segSeconds = Math.max(0, (now - lastEnd) / 1000);
+            const segCost = (segSeconds / 3600) * lapTable.rate;
+            return (
+              <div className="flex items-center justify-between mb-4 px-3 py-2 rounded-lg" style={{ background: FELT_DARK }}>
+                <span className="text-xs" style={{ color: "#b8c9bf" }}>Shu segment: {fmtDuration(segSeconds)}</span>
+                <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(segCost)}</span>
+              </div>
+            );
+          })()}
           <textarea value={lapComment} onChange={(e) => setLapComment(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy) — masalan kim o'ynadi"
             className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <button onClick={() => { onAddLap(lapTable.id, lapComment.trim()); setLapTable(null); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
@@ -2072,6 +2376,27 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
           </button>
         </Modal>
       )}
+
+      {viewTable && (() => {
+        const rate = viewTable.rate;
+        const existingLaps = viewTable.laps;
+        const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : viewTable.startTime;
+        const liveSeg = Math.max(0, (now - lastCheckpoint) / 1000);
+        const liveLaps = [
+          ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
+          { start: lastCheckpoint, end: now, duration: liveSeg, comment: "hozirgi, davom etmoqda", cost: (liveSeg / 3600) * rate },
+        ];
+        return (
+          <Modal onClose={() => setViewTable(null)}>
+            <p className="text-xs mb-2 px-2 py-1.5 rounded-lg text-center" style={{ background: "rgba(201,162,39,0.12)", color: GOLD }}>Stol yopilmadi — bu shunchaki hozirgi hisob</p>
+            <ReceiptView title={viewTable.name} start={viewTable.startTime} end={now}
+              duration={elapsedSeconds(viewTable)} tableCost={tableCost(viewTable)}
+              extras={viewTable.extras} extrasCost={extrasTotal(viewTable)}
+              laps={liveLaps} generalNote={viewTable.note} />
+            <button onClick={() => setViewTable(null)} className="w-full py-3 rounded-xl text-sm mt-2" style={{ background: FELT_DARK, color: CREAM }}>Yopish</button>
+          </Modal>
+        );
+      })()}
 
       {transferTable && (
         <Modal onClose={() => { setTransferTable(null); setTransferDest(null); }}>
@@ -2115,10 +2440,21 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
           <ReceiptView title={`${hall.name} · ${receipt.table.name}`} start={receipt.startTime} end={receipt.endTime}
             duration={receipt.duration} tableCost={receipt.tableCost} extras={receipt.extras} extrasCost={receipt.extrasCost}
             laps={receipt.laps} generalNote={receipt.generalNote} />
+          <div className="mb-2">
+            <div className="text-xs mb-1.5" style={{ color: "#b8c9bf" }}>To'lov turi</div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {[["naqd", "Naqd"], ["karta", "Karta"]].map(([val, label]) => (
+                <button key={val} onClick={() => setPaymentMethod(val)}
+                  className="py-2 rounded-lg text-xs font-medium" style={{ background: paymentMethod === val ? GOLD : FELT_DARK, color: paymentMethod === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <button disabled={closing} onClick={async () => {
             if (closing) return;
             setClosing(true);
-            await onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost });
+            await onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost }, paymentMethod);
             setReceipt(null);
             setClosing(false);
           }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 mt-2 disabled:opacity-50">
@@ -2178,27 +2514,71 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
 }
 
 // ---------------- STATS ----------------
-function StatsScreen({ history, onBack }) {
+function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack }) {
   const [selected, setSelected] = useState(null);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const today = history.filter((h) => isSameDay(h.endTime, Date.now()));
-  const week = history.filter((h) => daysAgo(h.endTime, 7));
-  const month = history.filter((h) => daysAgo(h.endTime, 30));
+  const [methodTab, setMethodTab] = useState("all"); // all | naqd | karta
+
+  const directEntries = (warehouseLogs || []).filter((l) => l.type === "direct").map((l) => {
+    const wi = (warehouseItems || []).find((w) => w.id === l.warehouseItemId);
+    const qty = -l.changeUnits;
+    const total = (l.sellPrice || 0) * qty;
+    const costTotal = (l.costPrice || 0) * qty;
+    const itemName = wi ? wi.name : "Mahsulot";
+    return {
+      id: `wl-${l.id}`, hallName: "Sklad", tableName: `${itemName} × ${qty}`,
+      startTime: l.createdAt, endTime: l.createdAt, duration: 0, tableCost: 0,
+      extras: [{ id: l.id, name: `${itemName} × ${qty}`, price: total, costPrice: costTotal }],
+      extrasCost: total, total, laps: [], generalNote: l.note || "",
+      actorName: l.actorName, paymentMethod: l.paymentMethod,
+    };
+  });
+  const combined = [...history, ...directEntries].sort((a, b) => b.endTime - a.endTime);
+
+  const filtered = methodTab === "all" ? combined : combined.filter((h) => (h.paymentMethod || "naqd") === methodTab);
+
+  const today = filtered.filter((h) => isSameDay(h.endTime, Date.now()));
+  const week = filtered.filter((h) => daysAgo(h.endTime, 7));
+  const month = filtered.filter((h) => daysAgo(h.endTime, 30));
   const summarize = (list) => ({ count: list.length, total: list.reduce((s, h) => s + h.total, 0) });
   const dS = summarize(today), wS = summarize(week), mS = summarize(month);
-  const grandTotal = history.reduce((s, h) => s + h.total, 0);
+  const grandTotal = filtered.reduce((s, h) => s + h.total, 0);
 
   const rangeActive = fromDate && toDate;
   const rangeStart = rangeActive ? new Date(fromDate + "T00:00:00").getTime() : null;
   const rangeEnd = rangeActive ? new Date(toDate + "T23:59:59").getTime() : null;
-  const rangeList = rangeActive ? history.filter((h) => h.endTime >= rangeStart && h.endTime <= rangeEnd) : [];
+  const rangeList = rangeActive ? filtered.filter((h) => h.endTime >= rangeStart && h.endTime <= rangeEnd) : [];
   const rangeSummary = summarize(rangeList);
+
+  function groupByShift(list) {
+    const sorted = [...(shifts || [])].sort((a, b) => b.openedAt - a.openedAt);
+    const groups = []; const used = new Set();
+    sorted.forEach((s) => {
+      const items = list.filter((h) => h.endTime >= s.openedAt && (s.closedAt ? h.endTime <= s.closedAt : true));
+      if (items.length > 0) {
+        groups.push({ key: s.id, label: `${fmtDate(s.openedAt)} · ${fmtTime(s.openedAt)}–${s.closedAt ? fmtTime(s.closedAt) : "hozirgacha"}`, items, total: items.reduce((sum, h) => sum + h.total, 0) });
+        items.forEach((h) => used.add(h.id));
+      }
+    });
+    const rest = list.filter((h) => !used.has(h.id));
+    if (rest.length > 0) groups.push({ key: "none", label: "Smenaga bog'liq emas", items: rest, total: rest.reduce((sum, h) => sum + h.total, 0) });
+    return groups;
+  }
+  // smena bo'yicha guruhlash
+  const shiftGroups = rangeActive ? groupByShift(rangeList) : [];
+  const allShiftGroups = groupByShift(filtered);
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
       <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
-      <h1 className="font-display text-2xl font-semibold mb-6" style={{ color: CREAM }}>Statistika</h1>
+      <h1 className="font-display text-2xl font-semibold mb-4" style={{ color: CREAM }}>Statistika</h1>
+
+      <div className="flex gap-2 mb-5">
+        <button onClick={() => setMethodTab("all")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: methodTab === "all" ? GOLD : FELT, color: methodTab === "all" ? FELT_DARK : CREAM }}>Umumiy</button>
+        <button onClick={() => setMethodTab("naqd")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: methodTab === "naqd" ? GOLD : FELT, color: methodTab === "naqd" ? FELT_DARK : CREAM }}>Naqd</button>
+        <button onClick={() => setMethodTab("karta")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: methodTab === "karta" ? GOLD : FELT, color: methodTab === "karta" ? FELT_DARK : CREAM }}>Karta</button>
+      </div>
 
       <div className="grid grid-cols-3 gap-2 mb-6">
         <PeriodCard label="Bugun" s={dS} /><PeriodCard label="7 kun" s={wS} /><PeriodCard label="30 kun" s={mS} />
@@ -2213,19 +2593,29 @@ function StatsScreen({ history, onBack }) {
         {rangeActive && (
           <div className="mt-3">
             <div className="flex justify-between items-baseline mb-3 px-1">
-              <span className="text-sm" style={{ color: CREAM }}>{rangeSummary.count} ta stol yopilgan</span>
+              <span className="text-sm" style={{ color: CREAM }}>{rangeSummary.count} ta yozuv</span>
               <span className="font-mono text-base font-bold" style={{ color: GOLD }}>{fmtMoney(rangeSummary.total)}</span>
             </div>
-            <div className="space-y-1.5 max-h-64 overflow-y-auto">
-              {rangeList.length === 0 && <p className="text-xs opacity-50 text-center py-3" style={{ color: CREAM }}>Shu oraliqda yopilgan stol yo'q</p>}
-              {rangeList.map((h) => (
-                <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-3 py-2.5 rounded-lg text-left" style={{ background: FELT_DARK }}>
-                  <div>
-                    <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-                    <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)}</div>
+            {shiftGroups.length === 0 && <p className="text-xs opacity-50 text-center py-3" style={{ color: CREAM }}>Shu oraliqda yopilgan stol yo'q</p>}
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {shiftGroups.map((g) => (
+                <div key={g.key}>
+                  <div className="flex justify-between items-center mb-1.5 px-1">
+                    <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
+                    <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
                   </div>
-                  <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
-                </button>
+                  <div className="space-y-1.5">
+                    {g.items.map((h) => (
+                      <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-3 py-2.5 rounded-lg text-left" style={{ background: FELT_DARK }}>
+                        <div>
+                          <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
+                          <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.actorName ? ` · ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
+                        </div>
+                        <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -2234,19 +2624,27 @@ function StatsScreen({ history, onBack }) {
 
       <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl overflow-hidden mb-2">
         <div className="text-center py-3 font-mono text-xs opacity-70" style={{ color: CREAM, borderBottom: `1px dashed ${FELT_LIGHT}` }}>UMUMIY CHEK — barcha yopilgan stollar</div>
-        {history.length === 0 && <p className="text-sm opacity-50 text-center py-6" style={{ color: CREAM }}>Hali tarix yo'q</p>}
-        {history.map((h) => (
-          <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-5 py-3 text-left" style={{ borderBottom: `1px dashed ${FELT_LIGHT}` }}>
-            <div>
-              <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-              <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}</div>
+        {filtered.length === 0 && <p className="text-sm opacity-50 text-center py-6" style={{ color: CREAM }}>Hali tarix yo'q</p>}
+        {allShiftGroups.map((g) => (
+          <div key={g.key} className="pt-3">
+            <div className="flex justify-between items-center px-5 pb-2">
+              <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
+              <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
             </div>
-            <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
-          </button>
+            {g.items.map((h) => (
+              <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-5 py-3 text-left" style={{ borderTop: `1px dashed ${FELT_LIGHT}` }}>
+                <div>
+                  <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
+                  <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}{h.actorName ? ` · ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
+                </div>
+                <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
+              </button>
+            ))}
+          </div>
         ))}
-        {history.length > 0 && (
-          <div className="flex justify-between items-baseline px-5 py-4" style={{ background: FELT_DARK }}>
-            <span className="font-display font-semibold" style={{ color: CREAM }}>Jami (hammasi)</span>
+        {filtered.length > 0 && (
+          <div className="flex justify-between items-baseline px-5 py-4 mt-2" style={{ background: FELT_DARK }}>
+            <span className="font-display font-semibold" style={{ color: CREAM }}>Jami ({methodTab === "all" ? "hammasi" : methodTab})</span>
             <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(grandTotal)}</span>
           </div>
         )}
@@ -2267,7 +2665,7 @@ function PeriodCard({ label, s }) {
     <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3">
       <div className="text-[11px] mb-2" style={{ color: "#8fa398" }}>{label}</div>
       <div className="font-display text-lg font-bold mb-0.5" style={{ color: CREAM }}>{s.count}</div>
-      <div className="text-[10px] mb-1.5" style={{ color: "#8fa398" }}>stol yopilgan</div>
+      <div className="text-[10px] mb-1.5" style={{ color: "#8fa398" }}>savdo</div>
       <div className="font-mono text-xs font-semibold" style={{ color: GOLD }}>{fmtMoney(s.total)}</div>
     </div>
   );
@@ -2388,8 +2786,9 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
             </button>
           )}
           {users.length === 0 && <p className="text-sm opacity-50" style={{ color: CREAM }}>Hali foydalanuvchi yo'q</p>}
-          {users.map((u) => {
+          {users.filter((u) => u.role !== "staff").map((u) => {
             const unread = (chats[u.id] || []).some((m) => m.from === "user" && !m.readByAdmin);
+            const myStaff = users.filter((s) => s.role === "staff" && s.parentOwnerId === u.id);
             return (
               <div key={u.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4">
                 <div className="flex items-center justify-between mb-1">
@@ -2408,6 +2807,19 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                 </div>
                 <div className="text-xs font-mono mb-1" style={{ color: "#8fa398" }}>{u.phone} · @{u.login}</div>
                 <div className="text-xs mb-1" style={{ color: "#8fa398" }}>Ro'yxatdan o'tgan: {fmtDate(u.createdAt)}</div>
+                {myStaff.length > 0 && (
+                  <div className="mb-3 pl-3 border-l-2 space-y-1" style={{ borderColor: GOLD }}>
+                    <div className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}><Users size={11} /> Ishchilari ({myStaff.length}):</div>
+                    {myStaff.map((s) => (
+                      <div key={s.id} className="flex items-center justify-between text-xs" style={{ color: "#b8c9bf" }}>
+                        <span>👤 {s.name} · @{s.login}</span>
+                        <button onClick={() => { if (confirm(`"${s.name}" ishchisini o'chirasizmi?`)) onDeleteUser(s.id); }}>
+                          <Trash2 size={12} style={{ color: RED }} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {u.subscribed && u.subscriptionUntil && u.accountType !== "vip" && (
                   <div className="text-xs mb-3" style={{ color: u.subscriptionUntil > Date.now() ? "#7bbf6a" : "#e88" }}>
                     Obuna: {u.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(u.subscriptionUntil)} gacha
@@ -2420,7 +2832,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                 )}
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => onToggleSub(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
-                    {u.subscribed ? "Obunani o'chirish" : "Obuna berish"}
+                    {u.subscribed && u.subscriptionUntil && u.subscriptionUntil > Date.now() ? "Obunani o'chirish" : "Obuna berish (kunlab)"}
                   </button>
                   <button onClick={() => onToggleVip(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
                     {u.accountType === "vip" ? "Oddiyga o'tkazish" : "VIP qilish"}
