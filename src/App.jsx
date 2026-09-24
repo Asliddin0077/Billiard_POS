@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.7.5"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.7.6")
+const APP_VERSION = "1.8.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.8.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -70,7 +70,9 @@ function unwrapRpc(data) { return Array.isArray(data) ? data[0] : data; }
 function computeNewUntil(currentUntilMs, days) {
   const now = Date.now();
   const base = currentUntilMs && currentUntilMs > now ? currentUntilMs : now;
-  return base + days * 86400000;
+  const target = new Date(base + days * 86400000);
+  target.setHours(8, 0, 0, 0); // klub odatda 8:00dan 8:00gacha ishlaydi — obuna shu vaqtda tugasin
+  return target.getTime();
 }
 
 // ---------------- DB row -> JS object mapping ----------------
@@ -195,19 +197,23 @@ async function fetchOwnerData(ownerId) {
   };
 }
 async function fetchAdminData() {
-  const [usersRes, promoRes, adminsRes, chatsRes] = await Promise.all([
+  const [usersRes, promoRes, adminsRes, chatsRes, openShiftsRes] = await Promise.all([
     supabase.from("users").select("*").order("created_at", { ascending: false }),
     supabase.from("promo_codes").select("*").order("created_at", { ascending: false }),
     supabase.from("admin_accounts").select("*").order("created_at", { ascending: false }),
     supabase.from("chats").select("*").order("created_at"),
+    supabase.from("shifts").select("owner_id, opened_at").eq("status", "open"),
   ]);
   const grouped = {};
   (chatsRes.data || []).forEach((row) => { const m = mapChat(row); (grouped[row.owner_id] = grouped[row.owner_id] || []).push(m); });
+  const openShiftOwners = {};
+  (openShiftsRes.data || []).forEach((row) => { openShiftOwners[row.owner_id] = new Date(row.opened_at).getTime(); });
   return {
     users: (usersRes.data || []).map(mapUser),
     promoCodes: (promoRes.data || []).map(mapPromo),
     adminAccounts: (adminsRes.data || []).map(mapAdmin),
     chatsByUser: grouped,
+    openShiftOwners,
   };
 }
 
@@ -282,6 +288,7 @@ export default function BilliardPOS() {
   const [promoCodes, setPromoCodes] = useState([]);
   const [adminAccounts, setAdminAccounts] = useState([]);
   const [chatsByUser, setChatsByUser] = useState({});
+  const [openShiftOwners, setOpenShiftOwners] = useState({});
   const [plans, setPlans] = useState([]);
 
   const [viewUserBasic, setViewUserBasic] = useState(null);
@@ -406,7 +413,7 @@ export default function BilliardPOS() {
   }
   async function loadAdmin() {
     const d = await fetchAdminData();
-    setUsers(d.users); setPromoCodes(d.promoCodes); setAdminAccounts(d.adminAccounts); setChatsByUser(d.chatsByUser);
+    setUsers(d.users); setPromoCodes(d.promoCodes); setAdminAccounts(d.adminAccounts); setChatsByUser(d.chatsByUser); setOpenShiftOwners(d.openShiftOwners);
   }
 
   // ---- auth ----
@@ -827,14 +834,19 @@ export default function BilliardPOS() {
   }
   async function toggleUserSub(userId) {
     const u = users.find((x) => x.id === userId);
-    if (u.subscribed && u.subscriptionUntil && u.subscriptionUntil > Date.now()) {
-      // hozir obunasi faol — o'chirib qo'yamiz
+    if (u.subscribed && (!u.subscriptionUntil || u.subscriptionUntil > Date.now())) {
+      // hozir obunasi faol (kunlik yoki cheksiz) — o'chirib qo'yamiz
       await supabase.from("users").update({ subscribed: false, subscription_until: null }).eq("id", userId);
+      await loadAdmin();
+      return;
+    }
+    const choice = window.prompt(`"${u.name}" ga qanday obuna berilsin?\n\n"cheksiz" deb yozing — cheksiz obuna\nyoki son kiriting — shuncha kunlik obuna (masalan: 30)`, "30");
+    if (!choice) return;
+    if (choice.trim().toLowerCase() === "cheksiz") {
+      await supabase.from("users").update({ subscribed: true, subscription_until: null }).eq("id", userId);
     } else {
-      const daysStr = window.prompt(`"${u.name}" ga necha kunlik obuna berilsin?`, "30");
-      if (!daysStr) return;
-      const days = Number(daysStr);
-      if (!days || days <= 0) { showToast("❌ Noto'g'ri son kiritildi"); return; }
+      const days = Number(choice);
+      if (!days || days <= 0) { showToast("❌ Noto'g'ri qiymat kiritildi"); return; }
       const newUntil = computeNewUntil(u.subscriptionUntil, days);
       await supabase.from("users").update({ subscribed: true, subscription_until: new Date(newUntil).toISOString() }).eq("id", userId);
     }
@@ -993,7 +1005,7 @@ export default function BilliardPOS() {
 
       {screen === "warehouse" && currentUser && currentUser.betaAccess && (
         <WarehouseScreen
-          bar={bar} warehouseItems={warehouseItems} warehouseLogs={warehouseLogs}
+          bar={bar} warehouseItems={warehouseItems} warehouseLogs={warehouseLogs} shifts={shifts}
           onBack={() => setScreen("halls")}
           onAddStock={addStock} onRemoveStock={removeStock} onDirectSale={sellDirect} onSetThreshold={setLowStockThreshold} onToast={showToast}
         />
@@ -1038,7 +1050,7 @@ export default function BilliardPOS() {
 
       {screen === "admin" && isAdmin && (
         <AdminScreen
-          users={users} promoCodes={promoCodes} chats={chatsByUser} adminAccounts={adminAccounts}
+          users={users} promoCodes={promoCodes} chats={chatsByUser} adminAccounts={adminAccounts} openShiftOwners={openShiftOwners}
           plans={plans} onAddPlan={addPlan} onDeletePlan={deletePlan}
           onAddPromo={addPromo} onToggleSub={toggleUserSub} onToggleVip={toggleVip} onToggleBetaAccess={toggleBetaAccess}
           onBan={banUser} onUnban={unbanUser} onAddAdmin={addAdmin} onAddUser={addUserDirect}
@@ -1289,7 +1301,6 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
             )}
           </button>
           <button onClick={onStats} title="Statistika"><BarChart3 size={18} style={{ color: "#b8c9bf" }} /></button>
-          <button onClick={onLogout} title="Chiqish"><LogOut size={18} style={{ color: "#b8c9bf" }} /></button>
         </div>
       </div>
       <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
@@ -1374,6 +1385,10 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
           <button disabled={!oldPass || newPass.length < 8}
             onClick={() => { onChangePassword(oldPass, newPass); setOldPass(""); setNewPass(""); setShowPass(false); }}
             style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">Saqlash</button>
+          <button onClick={() => { if (confirm("Akauntdan chiqasizmi?")) onLogout(); }}
+            className="w-full mt-3 py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2" style={{ background: FELT_DARK, color: "#ff8a8a", border: "1px solid #b23a3a" }}>
+            <LogOut size={15} /> Chiqish
+          </button>
           <p className="text-center text-xs mt-4" style={{ color: "#8fa398" }}>Ilova versiyasi: {APP_VERSION}</p>
         </Modal>
       )}
@@ -1508,7 +1523,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
 }
 
 // ---------------- SKLAD ----------------
-function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStock, onRemoveStock, onDirectSale, onSetThreshold, onToast }) {
+function WarehouseScreen({ bar, warehouseItems, warehouseLogs, shifts, onBack, onAddStock, onRemoveStock, onDirectSale, onSetThreshold, onToast }) {
   const [tab, setTab] = useState("stock"); // stock | report
   const [showAdd, setShowAdd] = useState(false);
   const [pickedBarItem, setPickedBarItem] = useState(null);
@@ -1524,9 +1539,57 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
   const [sellQty, setSellQty] = useState("");
   const [sellNote, setSellNote] = useState("");
   const [sellMethod, setSellMethod] = useState("naqd");
+  const [reportTab, setReportTab] = useState("day"); // day | week | month
+  const [repFrom, setRepFrom] = useState("");
+  const [repTo, setRepTo] = useState("");
 
   function itemLog(id) { return warehouseLogs.filter((l) => l.warehouseItemId === id); }
   const lowItems = warehouseItems.filter((w) => w.units <= w.lowStockThreshold);
+
+  // ---- hisobot: faqat sotuvlar (sale + direct), smena bo'yicha guruhlab, mahsulot nomi bo'yicha yig'ib ----
+  const salesLogs = warehouseLogs.filter((l) => l.type === "sale" || l.type === "direct");
+  const changeLogs = warehouseLogs.filter((l) => l.type === "add" || l.type === "remove");
+  const repCustomActive = repFrom && repTo;
+  const repStart = repCustomActive ? new Date(repFrom + "T00:00:00").getTime() : null;
+  const repEnd = repCustomActive ? new Date(repTo + "T23:59:59").getTime() : null;
+  function inRepPeriod(ts) {
+    if (repCustomActive) return ts >= repStart && ts <= repEnd;
+    if (reportTab === "day") return isSameDay(ts, Date.now());
+    if (reportTab === "week") return daysAgo(ts, 7);
+    return daysAgo(ts, 30);
+  }
+  const periodSales = salesLogs.filter((l) => inRepPeriod(l.createdAt));
+  function aggregate(list) {
+    const map = {};
+    let totalQty = 0, totalMoney = 0;
+    list.forEach((l) => {
+      const wi = warehouseItems.find((w) => w.id === l.warehouseItemId);
+      const name = wi ? wi.name : "Noma'lum";
+      const qty = -l.changeUnits;
+      const money = (l.sellPrice || 0) * qty;
+      if (!map[name]) map[name] = { qty: 0, money: 0 };
+      map[name].qty += qty; map[name].money += money;
+      totalQty += qty; totalMoney += money;
+    });
+    return { items: Object.entries(map).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.qty - a.qty), totalQty, totalMoney };
+  }
+  function groupSalesByShift(list) {
+    const sorted = [...(shifts || [])].sort((a, b) => b.openedAt - a.openedAt);
+    const groups = []; const used = new Set();
+    sorted.forEach((s) => {
+      const items = list.filter((l) => l.createdAt >= s.openedAt && (s.closedAt ? l.createdAt <= s.closedAt : true));
+      if (items.length > 0) {
+        groups.push({ key: s.id, label: `${fmtDate(s.openedAt)} · ${fmtTime(s.openedAt)}–${s.closedAt ? fmtTime(s.closedAt) : "hozirgacha"}`, ...aggregate(items) });
+        items.forEach((l) => used.add(l.id));
+      }
+    });
+    const rest = list.filter((l) => !used.has(l.id));
+    if (rest.length > 0) groups.push({ key: "none", label: "Smenaga bog'liq emas", ...aggregate(rest) });
+    return groups;
+  }
+  const reportShiftGroups = groupSalesByShift(periodSales);
+  const reportOverall = aggregate(periodSales);
+  const periodChanges = changeLogs.filter((l) => inRepPeriod(l.createdAt));
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
@@ -1592,25 +1655,70 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, onBack, onAddStoc
       )}
 
       {tab === "report" && (
-        <div className="space-y-2">
-          {warehouseLogs.length === 0 ? (
-            <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha yozuv yo'q</p>
-          ) : warehouseLogs.map((l) => {
-            const wi = warehouseItems.find((w) => w.id === l.warehouseItemId);
-            return (
-              <div key={l.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14 }} className="p-3 flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium" style={{ color: CREAM }}>{wi ? wi.name : "?"}</div>
-                  <div className="text-[11px]" style={{ color: "#b8c9bf" }}>
-                    {l.entryDate} {fmtTime(l.createdAt)} · {l.type === "add" ? "qo'shildi" : l.type === "remove" ? "ayrildi" : l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : "stolga sotildi"}{l.note ? ` · ${l.note}` : ""}{l.actorName ? ` · ${l.actorName}` : ""}
-                  </div>
+        <div>
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => { setReportTab("day"); setRepFrom(""); setRepTo(""); }} disabled={repCustomActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !repCustomActive && reportTab === "day" ? GOLD : FELT, color: !repCustomActive && reportTab === "day" ? FELT_DARK : CREAM }}>Kunlik</button>
+            <button onClick={() => { setReportTab("week"); setRepFrom(""); setRepTo(""); }} disabled={repCustomActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !repCustomActive && reportTab === "week" ? GOLD : FELT, color: !repCustomActive && reportTab === "week" ? FELT_DARK : CREAM }}>Haftalik</button>
+            <button onClick={() => { setReportTab("month"); setRepFrom(""); setRepTo(""); }} disabled={repCustomActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !repCustomActive && reportTab === "month" ? GOLD : FELT, color: !repCustomActive && reportTab === "month" ? FELT_DARK : CREAM }}>Oylik</button>
+          </div>
+
+          <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 mb-4">
+            <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: "#8fa398" }}><CalendarRange size={13} /> Yoki aniq sana tanlang</div>
+            <div className="flex gap-2">
+              <input type="date" value={repFrom} onChange={(e) => setRepFrom(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+              <input type="date" value={repTo} onChange={(e) => setRepTo(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+              {repCustomActive && <button onClick={() => { setRepFrom(""); setRepTo(""); }} className="px-3 rounded-lg text-xs" style={{ background: FELT_DARK, color: "#ff8a8a" }}>Tozalash</button>}
+            </div>
+          </div>
+
+          <div style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}`, borderRadius: 16 }} className="p-4 mb-4 flex justify-between items-center">
+            <span className="text-sm font-semibold" style={{ color: GOLD }}>Jami sotilgan: {reportOverall.totalQty} dona</span>
+            <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(reportOverall.totalMoney)}</span>
+          </div>
+
+          {reportShiftGroups.length === 0 && <p className="text-sm text-center py-6" style={{ color: "#b8c9bf" }}>Shu davrda sotuv bo'lmagan</p>}
+          <div className="space-y-4 mb-4">
+            {reportShiftGroups.map((g) => (
+              <div key={g.key}>
+                <div className="flex justify-between items-center mb-1.5 px-1">
+                  <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 {g.label}</span>
+                  <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.totalMoney)}</span>
                 </div>
-                <div className="text-sm font-semibold" style={{ color: l.changeUnits > 0 ? "#7fd99a" : "#ff8a8a" }}>
-                  {l.changeUnits > 0 ? "+" : ""}{l.changeUnits}
+                <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14, overflow: "hidden" }}>
+                  {g.items.map((it, idx) => (
+                    <div key={it.name} className="flex justify-between items-center px-3.5 py-2.5" style={{ borderTop: idx > 0 ? `1px solid ${FELT_LIGHT}` : "none" }}>
+                      <span className="text-sm" style={{ color: CREAM }}>{it.name} × {it.qty}</span>
+                      <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(it.money)}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
-            );
-          })}
+            ))}
+          </div>
+
+          {periodChanges.length > 0 && (
+            <details className="mt-2">
+              <summary className="text-xs cursor-pointer mb-2" style={{ color: "#8fa398" }}>Kirim/chiqim tarixi (qo'shilgan/ayirilgan) — {periodChanges.length} ta</summary>
+              <div className="space-y-1.5 mt-2">
+                {periodChanges.map((l) => {
+                  const wi = warehouseItems.find((w) => w.id === l.warehouseItemId);
+                  return (
+                    <div key={l.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 12 }} className="p-2.5 flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-medium" style={{ color: CREAM }}>{wi ? wi.name : "?"}</div>
+                        <div className="text-[10px]" style={{ color: "#8fa398" }}>
+                          {l.entryDate} {fmtTime(l.createdAt)} · {l.type === "add" ? "qo'shildi" : "ayrildi"}{l.note ? ` · ${l.note}` : ""}{l.actorName ? ` · ${l.actorName}` : ""}
+                        </div>
+                      </div>
+                      <div className="text-xs font-semibold" style={{ color: l.changeUnits > 0 ? "#7fd99a" : "#ff8a8a" }}>
+                        {l.changeUnits > 0 ? "+" : ""}{l.changeUnits}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          )}
         </div>
       )}
 
@@ -2729,7 +2837,7 @@ function SupportScreen({ messages, onSend, onBack }) {
 }
 
 // ---------------- ADMIN ----------------
-function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan, onDeletePlan, onAddPromo, onToggleSub, onToggleVip, onToggleBetaAccess, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
+function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners, plans, onAddPlan, onDeletePlan, onAddPromo, onToggleSub, onToggleVip, onToggleBetaAccess, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
   const [tab, setTab] = useState("stats");
   const [code, setCode] = useState("");
   const [promoDays, setPromoDays] = useState("");
@@ -2814,6 +2922,11 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                 <div className="flex items-center justify-between mb-1">
                   <button onClick={() => onViewUser(u)} className="font-medium text-sm flex items-center gap-1.5 underline decoration-dotted" style={{ color: CREAM }}>
                     {u.name} {u.accountType === "vip" && <Crown size={13} style={{ color: GOLD }} />}
+                    {openShiftOwners && openShiftOwners[u.id] && (
+                      <span className="text-[10px] font-normal no-underline px-2 py-0.5 rounded-full flex items-center gap-1" style={{ background: "rgba(123,191,106,0.18)", color: "#7bbf6a" }}>
+                        🟢 Smena ochiq
+                      </span>
+                    )}
                   </button>
                   <div className="flex items-center gap-2">
                     <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: u.subscribed || u.accountType === "vip" ? "rgba(201,162,39,0.15)" : "rgba(178,58,58,0.15)", color: u.subscribed || u.accountType === "vip" ? GOLD : "#e88" }}>
@@ -2845,6 +2958,9 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                     Obuna: {u.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(u.subscriptionUntil)} gacha
                   </div>
                 )}
+                {u.subscribed && !u.subscriptionUntil && u.accountType !== "vip" && (
+                  <div className="text-xs mb-3" style={{ color: "#7bbf6a" }}>Obuna: faol, cheksiz</div>
+                )}
                 {u.banned && (
                   <div className="text-xs mb-3 px-2 py-1.5 rounded-lg" style={{ background: "rgba(178,58,58,0.15)", color: "#e88" }}>
                     Bloklangan: {fmtDate(u.banUntil)} gacha · Sabab: {u.banReason || "—"}
@@ -2852,7 +2968,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
                 )}
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => onToggleSub(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
-                    {u.subscribed && u.subscriptionUntil && u.subscriptionUntil > Date.now() ? "Obunani o'chirish" : "Obuna berish (kunlab)"}
+                    {u.subscribed && (!u.subscriptionUntil || u.subscriptionUntil > Date.now()) ? "Obunani o'chirish" : "Obuna berish"}
                   </button>
                   <button onClick={() => onToggleVip(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
                     {u.accountType === "vip" ? "Oddiyga o'tkazish" : "VIP qilish"}
@@ -3104,7 +3220,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
           {viewUserLoading || !viewUserContent ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="animate-spin" style={{ color: GOLD }} size={26} /></div>
           ) : (
-            <UserPanelView user={viewUserBasic} halls={viewUserContent.halls} bar={viewUserContent.bar} history={viewUserContent.history} />
+            <UserPanelView user={viewUserBasic} halls={viewUserContent.halls} bar={viewUserContent.bar} history={viewUserContent.history} shifts={viewUserContent.shifts} />
           )}
         </Modal>
       )}
@@ -3112,18 +3228,41 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, plans, onAddPlan
   );
 }
 
-function UserPanelView({ user, halls, bar, history }) {
+function UserPanelView({ user, halls, bar, history, shifts }) {
   const today = history.filter((h) => isSameDay(h.endTime, Date.now()));
   const week = history.filter((h) => daysAgo(h.endTime, 7));
   const month = history.filter((h) => daysAgo(h.endTime, 30));
   const summarize = (list) => ({ count: list.length, total: list.reduce((s, h) => s + h.total, 0) });
   const dS = summarize(today), wS = summarize(week), mS = summarize(month);
   const grandTotal = history.reduce((s, h) => s + h.total, 0);
+  const openShiftObj = (shifts || []).find((s) => s.status === "open");
+
+  function groupByShift(list) {
+    const sorted = [...(shifts || [])].sort((a, b) => b.openedAt - a.openedAt);
+    const groups = []; const used = new Set();
+    sorted.forEach((s) => {
+      const items = list.filter((h) => h.endTime >= s.openedAt && (s.closedAt ? h.endTime <= s.closedAt : true));
+      if (items.length > 0) {
+        groups.push({ key: s.id, label: `${fmtDate(s.openedAt)} · ${fmtTime(s.openedAt)}–${s.closedAt ? fmtTime(s.closedAt) : "hozirgacha"}`, items, total: items.reduce((sum, h) => sum + h.total, 0) });
+        items.forEach((h) => used.add(h.id));
+      }
+    });
+    const rest = list.filter((h) => !used.has(h.id));
+    if (rest.length > 0) groups.push({ key: "none", label: "Smenaga bog'liq emas", items: rest, total: rest.reduce((sum, h) => sum + h.total, 0) });
+    return groups;
+  }
+  const historyGroups = groupByShift(history);
 
   return (
     <div>
-      <h2 className="font-display text-lg font-semibold mb-1" style={{ color: CREAM }}>{user.name} — panel</h2>
+      <h2 className="font-display text-lg font-semibold mb-1 flex items-center gap-2" style={{ color: CREAM }}>
+        {user.name} — panel
+        {openShiftObj && <span className="text-[10px] font-normal px-2 py-0.5 rounded-full" style={{ background: "rgba(123,191,106,0.18)", color: "#7bbf6a" }}>🟢 Smena ochiq</span>}
+      </h2>
       <p className="text-xs mb-1" style={{ color: "#8fa398" }}>@{user.login} · {user.phone}</p>
+      {openShiftObj && (
+        <p className="text-xs mb-1" style={{ color: "#7bbf6a" }}>Smena: {openShiftObj.openedByName} · {fmtDate(openShiftObj.openedAt)} · {fmtTime(openShiftObj.openedAt)} dan beri</p>
+      )}
       {user.subscribed && user.subscriptionUntil && user.accountType !== "vip" && (
         <p className="text-xs mb-4" style={{ color: user.subscriptionUntil > Date.now() ? "#7bbf6a" : "#e88" }}>
           Obuna: {user.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(user.subscriptionUntil)} gacha
@@ -3156,16 +3295,26 @@ function UserPanelView({ user, halls, bar, history }) {
         <PeriodCard label="Bugun" s={dS} /><PeriodCard label="7 kun" s={wS} /><PeriodCard label="30 kun" s={mS} />
       </div>
 
-      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Tarix</div>
-      <div className="space-y-2 max-h-56 overflow-y-auto">
+      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Tarix — smena bo'yicha</div>
+      <div className="space-y-3 max-h-72 overflow-y-auto">
         {history.length === 0 && <p className="text-sm opacity-50" style={{ color: CREAM }}>Hali tarix yo'q</p>}
-        {history.map((h) => (
-          <div key={h.id} style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 flex justify-between items-center">
-            <div>
-              <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-              <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)}</div>
+        {historyGroups.map((g) => (
+          <div key={g.key}>
+            <div className="flex justify-between items-center mb-1 px-1">
+              <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 {g.label}</span>
+              <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
             </div>
-            <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
+            <div className="space-y-1.5">
+              {g.items.map((h) => (
+                <div key={h.id} style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 flex justify-between items-center">
+                  <div>
+                    <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
+                    <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.actorName ? ` · ${h.actorName}` : ""}</div>
+                  </div>
+                  <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
+                </div>
+              ))}
+            </div>
           </div>
         ))}
         {history.length > 0 && (
