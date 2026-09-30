@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.2.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.8.1")
+const APP_VERSION = "1.2.2"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.9.2")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -85,6 +85,7 @@ function mapUser(row) {
     banReason: row.ban_reason || "", createdAt: new Date(row.created_at).getTime(),
     subscriptionUntil: row.subscription_until ? new Date(row.subscription_until).getTime() : null,
     role: row.role || "owner", parentOwnerId: row.parent_owner_id || null,
+    trialUsed: !!row.trial_used,
   };
 }
 function ownerIdOf(u) { return u ? u.id : null; }
@@ -263,6 +264,8 @@ export default function BilliardPOS() {
   const [now, setNow] = useState(Date.now());
   const [activeHallId, setActiveHallId] = useState(null);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [trialDays, setTrialDays] = useState(3);
+  const [trialEnabled, setTrialEnabled] = useState(true);
   const [updating, setUpdating] = useState(false);
 
   const [currentUser, setCurrentUser] = useState(null);
@@ -361,8 +364,10 @@ export default function BilliardPOS() {
   useEffect(() => {
     async function checkVersion() {
       try {
-        const { data } = await supabase.from("app_meta").select("latest_version").eq("id", 1).single();
+        const { data } = await supabase.from("app_meta").select("latest_version, trial_days, trial_enabled").eq("id", 1).single();
         if (data && data.latest_version) setUpdateAvailable(data.latest_version !== APP_VERSION);
+        if (data && data.trial_days) setTrialDays(Number(data.trial_days));
+        if (data && data.trial_enabled != null) setTrialEnabled(!!data.trial_enabled);
       } catch (e) {}
     }
     checkVersion();
@@ -496,6 +501,15 @@ export default function BilliardPOS() {
     setCurrentUser((u) => ({ ...u, subscribed: true, subscriptionUntil: newUntil }));
     setScreen("halls"); showToast(`Obuna faollashtirildi! ${fmtDate(newUntil)} gacha`);
   }
+  async function activateFreeTrial() {
+    if (!trialEnabled) { showToast("❌ Bepul sinov hozircha o'chirilgan"); return; }
+    if (currentUser.trialUsed) { showToast("❌ Siz avval bepul sinovdan foydalangansiz"); return; }
+    const newUntil = computeNewUntil(null, trialDays);
+    const r = await supabase.from("users").update({ subscribed: true, subscription_until: new Date(newUntil).toISOString(), trial_used: true }).eq("id", currentUser.id);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    setCurrentUser((u) => ({ ...u, subscribed: true, subscriptionUntil: newUntil, trialUsed: true }));
+    setScreen("halls"); showToast(`✅ Bepul sinov faollashtirildi! ${fmtDate(newUntil)} soat 08:00gacha`);
+  }
   // To'lov endi Telegram bot orqali (@Billiard_pos_bot) - admin qo'lda faollashtiradi
 
   // ---- halls/tables ----
@@ -584,6 +598,9 @@ export default function BilliardPOS() {
     return true;
   }
   async function addExtrasBatch(hallId, tableId, items) {
+    const hall = halls.find((h) => h.id === hallId);
+    const table = hall && hall.tables.find((t) => t.id === tableId);
+    const tableLabel = hall && table ? `${hall.name} · ${table.name}` : "stolga sotildi";
     for (const item of items) {
       if (!item || item.qty <= 0) continue;
       const barItem = item.barItemId ? bar.find((b) => b.id === item.barItemId) : null;
@@ -599,7 +616,7 @@ export default function BilliardPOS() {
         await supabase.from("warehouse_items").update({ units_in_stock: wi.units - item.qty }).eq("id", wi.id);
         await supabase.from("warehouse_logs").insert({
           warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -item.qty, type: "sale",
-          cost_price: costPrice, sell_price: item.price, note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
+          cost_price: costPrice, sell_price: item.price, note: tableLabel, entry_date: new Date().toISOString().slice(0, 10),
           actor_id: currentUser.id, actor_name: currentUser.name,
         });
       } else {
@@ -828,6 +845,20 @@ export default function BilliardPOS() {
     await supabase.from("subscription_plans").update({ active: false }).eq("id", id);
     await fetchPlans();
   }
+  async function setTrialDaysConfig(days) {
+    const n = Number(days);
+    if (!n || n <= 0) { showToast("❌ Noto'g'ri qiymat"); return; }
+    const r = await supabase.from("app_meta").update({ trial_days: n }).eq("id", 1);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    setTrialDays(n);
+    showToast(`✅ Bepul sinov muddati ${n} kunga o'zgartirildi`);
+  }
+  async function setTrialEnabledConfig(enabled) {
+    const r = await supabase.from("app_meta").update({ trial_enabled: enabled }).eq("id", 1);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    setTrialEnabled(enabled);
+    showToast(enabled ? "✅ Bepul sinov YOQILDI" : "⛔ Bepul sinov O'CHIRILDI");
+  }
   async function addPromo(code, durationDays) {
     await supabase.from("promo_codes").insert({ code, duration_days: Number(durationDays) });
     await loadAdmin();
@@ -985,7 +1016,7 @@ export default function BilliardPOS() {
 
       {screen === "auth" && <AuthScreen onRegister={handleRegister} onLogin={handleLogin} />}
       {screen === "banned" && currentUser && <BannedScreen user={currentUser} onLogout={handleLogout} />}
-      {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} plans={plans} onPromo={activatePromo} onLogout={handleLogout} />}
+      {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} plans={plans} trialDays={trialDays} trialEnabled={trialEnabled} onPromo={activatePromo} onFreeTrial={activateFreeTrial} onLogout={handleLogout} />}
 
       {screen === "halls" && currentUser && (
         <HallsScreen
@@ -1052,6 +1083,8 @@ export default function BilliardPOS() {
         <AdminScreen
           users={users} promoCodes={promoCodes} chats={chatsByUser} adminAccounts={adminAccounts} openShiftOwners={openShiftOwners}
           plans={plans} onAddPlan={addPlan} onDeletePlan={deletePlan}
+          trialDays={trialDays} onSetTrialDays={setTrialDaysConfig}
+          trialEnabled={trialEnabled} onSetTrialEnabled={setTrialEnabledConfig}
           onAddPromo={addPromo} onToggleSub={toggleUserSub} onToggleVip={toggleVip} onToggleBetaAccess={toggleBetaAccess}
           onBan={banUser} onUnban={unbanUser} onAddAdmin={addAdmin} onAddUser={addUserDirect}
           onDeleteAdmin={deleteAdmin} onDeleteUser={deleteUser} onChangePassword={changeAdminPassword}
@@ -1199,7 +1232,7 @@ function BannedScreen({ user, onLogout }) {
 }
 
 // ---------------- SUBSCRIBE ----------------
-function SubscribeScreen({ user, plans, onPromo, onLogout }) {
+function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFreeTrial, onLogout }) {
   const [code, setCode] = useState("");
   const BOT = "https://t.me/Billiard_pos_bot";
   return (
@@ -1233,6 +1266,13 @@ function SubscribeScreen({ user, plans, onPromo, onLogout }) {
             </div>
           );
         })}
+
+        {trialEnabled && !user.trialUsed && (
+          <button onClick={onFreeTrial}
+            style={{ background: "transparent", border: `1px dashed ${GOLD}`, color: GOLD }} className="w-full py-3 rounded-xl font-semibold text-sm mb-3">
+            🎁 Tekinga {trialDays} kun ishlatish
+          </button>
+        )}
 
         <p className="text-xs text-center mb-4" style={{ color: "#8fa398" }}>
           Tugmani bosgach @Billiard_pos_bot ochiladi — u yerda to'lov cheki yuborasiz, tasdiqlangach obunangiz faollashadi.
@@ -1579,12 +1619,12 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, shifts, onBack, o
     sorted.forEach((s) => {
       const items = list.filter((l) => l.createdAt >= s.openedAt && (s.closedAt ? l.createdAt <= s.closedAt : true));
       if (items.length > 0) {
-        groups.push({ key: s.id, label: `${fmtDate(s.openedAt)} · ${fmtTime(s.openedAt)}–${s.closedAt ? fmtTime(s.closedAt) : "hozirgacha"}`, ...aggregate(items) });
+        groups.push({ key: s.id, label: `${fmtDate(s.openedAt)} · ${fmtTime(s.openedAt)}–${s.closedAt ? fmtTime(s.closedAt) : "hozirgacha"}`, raw: [...items].sort((a, b) => b.createdAt - a.createdAt), ...aggregate(items) });
         items.forEach((l) => used.add(l.id));
       }
     });
     const rest = list.filter((l) => !used.has(l.id));
-    if (rest.length > 0) groups.push({ key: "none", label: "Smenaga bog'liq emas", ...aggregate(rest) });
+    if (rest.length > 0) groups.push({ key: "none", label: "Smenaga bog'liq emas", raw: [...rest].sort((a, b) => b.createdAt - a.createdAt), ...aggregate(rest) });
     return groups;
   }
   const reportShiftGroups = groupSalesByShift(periodSales);
@@ -1685,12 +1725,22 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, shifts, onBack, o
                   <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.totalMoney)}</span>
                 </div>
                 <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14, overflow: "hidden" }}>
-                  {g.items.map((it, idx) => (
-                    <div key={it.name} className="flex justify-between items-center px-3.5 py-2.5" style={{ borderTop: idx > 0 ? `1px solid ${FELT_LIGHT}` : "none" }}>
-                      <span className="text-sm" style={{ color: CREAM }}>{it.name} × {it.qty}</span>
-                      <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(it.money)}</span>
-                    </div>
-                  ))}
+                  {g.raw.map((l, idx) => {
+                    const wi = warehouseItems.find((w) => w.id === l.warehouseItemId);
+                    const qty = -l.changeUnits;
+                    const money = (l.sellPrice || 0) * qty;
+                    return (
+                      <div key={l.id} className="flex justify-between items-center px-3.5 py-2.5" style={{ borderTop: idx > 0 ? `1px solid ${FELT_LIGHT}` : "none" }}>
+                        <div>
+                          <div className="text-sm" style={{ color: CREAM }}>{wi ? wi.name : "?"} × {qty}</div>
+                          <div className="text-[11px]" style={{ color: "#8fa398" }}>
+                            {fmtTime(l.createdAt)} · {l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : (l.note || "stolga sotildi")}{l.actorName ? ` · ${l.actorName}` : ""}
+                          </div>
+                        </div>
+                        <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(money)}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))}
@@ -2837,7 +2887,7 @@ function SupportScreen({ messages, onSend, onBack }) {
 }
 
 // ---------------- ADMIN ----------------
-function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners, plans, onAddPlan, onDeletePlan, onAddPromo, onToggleSub, onToggleVip, onToggleBetaAccess, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
+function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners, plans, onAddPlan, onDeletePlan, trialDays, onSetTrialDays, trialEnabled, onSetTrialEnabled, onAddPromo, onToggleSub, onToggleVip, onToggleBetaAccess, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
   const [tab, setTab] = useState("stats");
   const [code, setCode] = useState("");
   const [promoDays, setPromoDays] = useState("");
@@ -2995,6 +3045,23 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
 
       {tab === "plans" && (
         <div>
+          {isSuperAdmin && (
+            <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-xs" style={{ color: "#8fa398" }}>Bepul sinov muddati (hozir: {trialDays} kun)</div>
+                <button onClick={() => onSetTrialEnabled(!trialEnabled)}
+                  className="text-xs px-3 py-1.5 rounded-lg font-semibold" style={{ background: trialEnabled ? "rgba(123,191,106,0.18)" : "rgba(178,58,58,0.15)", color: trialEnabled ? "#7bbf6a" : "#e88" }}>
+                  {trialEnabled ? "🟢 YOQIQ" : "⛔ O'CHIRILGAN"}
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <input type="number" defaultValue={trialDays} id="trialDaysInput"
+                  className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+                <button onClick={() => onSetTrialDays(document.getElementById("trialDaysInput").value)}
+                  style={{ background: GOLD, color: FELT_DARK }} className="px-4 rounded-lg text-sm font-semibold">Saqlash</button>
+              </div>
+            </div>
+          )}
           {isSuperAdmin ? (
             <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
               <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi tarif qo'shish</div>
