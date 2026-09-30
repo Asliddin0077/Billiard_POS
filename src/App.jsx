@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.9.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.9.1")
+const APP_VERSION = "1.9.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.9.2")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -265,6 +265,7 @@ export default function BilliardPOS() {
   const [activeHallId, setActiveHallId] = useState(null);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [trialDays, setTrialDays] = useState(3);
+  const [trialEnabled, setTrialEnabled] = useState(true);
   const [updating, setUpdating] = useState(false);
 
   const [currentUser, setCurrentUser] = useState(null);
@@ -363,9 +364,10 @@ export default function BilliardPOS() {
   useEffect(() => {
     async function checkVersion() {
       try {
-        const { data } = await supabase.from("app_meta").select("latest_version, trial_days").eq("id", 1).single();
+        const { data } = await supabase.from("app_meta").select("latest_version, trial_days, trial_enabled").eq("id", 1).single();
         if (data && data.latest_version) setUpdateAvailable(data.latest_version !== APP_VERSION);
         if (data && data.trial_days) setTrialDays(Number(data.trial_days));
+        if (data && data.trial_enabled != null) setTrialEnabled(!!data.trial_enabled);
       } catch (e) {}
     }
     checkVersion();
@@ -500,6 +502,7 @@ export default function BilliardPOS() {
     setScreen("halls"); showToast(`Obuna faollashtirildi! ${fmtDate(newUntil)} gacha`);
   }
   async function activateFreeTrial() {
+    if (!trialEnabled) { showToast("❌ Bepul sinov hozircha o'chirilgan"); return; }
     if (currentUser.trialUsed) { showToast("❌ Siz avval bepul sinovdan foydalangansiz"); return; }
     const newUntil = computeNewUntil(null, trialDays);
     const r = await supabase.from("users").update({ subscribed: true, subscription_until: new Date(newUntil).toISOString(), trial_used: true }).eq("id", currentUser.id);
@@ -850,6 +853,12 @@ export default function BilliardPOS() {
     setTrialDays(n);
     showToast(`✅ Bepul sinov muddati ${n} kunga o'zgartirildi`);
   }
+  async function setTrialEnabledConfig(enabled) {
+    const r = await supabase.from("app_meta").update({ trial_enabled: enabled }).eq("id", 1);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    setTrialEnabled(enabled);
+    showToast(enabled ? "✅ Bepul sinov YOQILDI" : "⛔ Bepul sinov O'CHIRILDI");
+  }
   async function addPromo(code, durationDays) {
     await supabase.from("promo_codes").insert({ code, duration_days: Number(durationDays) });
     await loadAdmin();
@@ -1007,7 +1016,7 @@ export default function BilliardPOS() {
 
       {screen === "auth" && <AuthScreen onRegister={handleRegister} onLogin={handleLogin} />}
       {screen === "banned" && currentUser && <BannedScreen user={currentUser} onLogout={handleLogout} />}
-      {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} plans={plans} trialDays={trialDays} onPromo={activatePromo} onFreeTrial={activateFreeTrial} onLogout={handleLogout} />}
+      {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} plans={plans} trialDays={trialDays} trialEnabled={trialEnabled} onPromo={activatePromo} onFreeTrial={activateFreeTrial} onLogout={handleLogout} />}
 
       {screen === "halls" && currentUser && (
         <HallsScreen
@@ -1075,6 +1084,7 @@ export default function BilliardPOS() {
           users={users} promoCodes={promoCodes} chats={chatsByUser} adminAccounts={adminAccounts} openShiftOwners={openShiftOwners}
           plans={plans} onAddPlan={addPlan} onDeletePlan={deletePlan}
           trialDays={trialDays} onSetTrialDays={setTrialDaysConfig}
+          trialEnabled={trialEnabled} onSetTrialEnabled={setTrialEnabledConfig}
           onAddPromo={addPromo} onToggleSub={toggleUserSub} onToggleVip={toggleVip} onToggleBetaAccess={toggleBetaAccess}
           onBan={banUser} onUnban={unbanUser} onAddAdmin={addAdmin} onAddUser={addUserDirect}
           onDeleteAdmin={deleteAdmin} onDeleteUser={deleteUser} onChangePassword={changeAdminPassword}
@@ -1222,7 +1232,7 @@ function BannedScreen({ user, onLogout }) {
 }
 
 // ---------------- SUBSCRIBE ----------------
-function SubscribeScreen({ user, plans, trialDays, onPromo, onFreeTrial, onLogout }) {
+function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFreeTrial, onLogout }) {
   const [code, setCode] = useState("");
   const BOT = "https://t.me/Billiard_pos_bot";
   return (
@@ -1257,7 +1267,7 @@ function SubscribeScreen({ user, plans, trialDays, onPromo, onFreeTrial, onLogou
           );
         })}
 
-        {!user.trialUsed && (
+        {trialEnabled && !user.trialUsed && (
           <button onClick={onFreeTrial}
             style={{ background: "transparent", border: `1px dashed ${GOLD}`, color: GOLD }} className="w-full py-3 rounded-xl font-semibold text-sm mb-3">
             🎁 Tekinga {trialDays} kun ishlatish
@@ -2877,7 +2887,7 @@ function SupportScreen({ messages, onSend, onBack }) {
 }
 
 // ---------------- ADMIN ----------------
-function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners, plans, onAddPlan, onDeletePlan, trialDays, onSetTrialDays, onAddPromo, onToggleSub, onToggleVip, onToggleBetaAccess, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
+function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners, plans, onAddPlan, onDeletePlan, trialDays, onSetTrialDays, trialEnabled, onSetTrialEnabled, onAddPromo, onToggleSub, onToggleVip, onToggleBetaAccess, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
   const [tab, setTab] = useState("stats");
   const [code, setCode] = useState("");
   const [promoDays, setPromoDays] = useState("");
@@ -3037,7 +3047,13 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
         <div>
           {isSuperAdmin && (
             <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
-              <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Bepul sinov muddati (hozir: {trialDays} kun)</div>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-xs" style={{ color: "#8fa398" }}>Bepul sinov muddati (hozir: {trialDays} kun)</div>
+                <button onClick={() => onSetTrialEnabled(!trialEnabled)}
+                  className="text-xs px-3 py-1.5 rounded-lg font-semibold" style={{ background: trialEnabled ? "rgba(123,191,106,0.18)" : "rgba(178,58,58,0.15)", color: trialEnabled ? "#7bbf6a" : "#e88" }}>
+                  {trialEnabled ? "🟢 YOQIQ" : "⛔ O'CHIRILGAN"}
+                </button>
+              </div>
               <div className="flex gap-2">
                 <input type="number" defaultValue={trialDays} id="trialDaysInput"
                   className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
