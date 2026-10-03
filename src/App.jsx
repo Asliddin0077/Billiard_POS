@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "1.9.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "1.9.2")
+const APP_VERSION = "2.0.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.0.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -67,6 +67,11 @@ function isBanned(u) {
   return u && u.banned && u.banUntil && u.banUntil > Date.now();
 }
 function unwrapRpc(data) { return Array.isArray(data) ? data[0] : data; }
+async function resolveAccessUser(u) {
+  if (!u || u.role !== "staff" || !u.parentOwnerId) return u;
+  const { data } = await supabase.from("users").select("*").eq("id", u.parentOwnerId).single();
+  return data ? mapUser(data) : u;
+}
 function computeNewUntil(currentUntilMs, days) {
   const now = Date.now();
   const base = currentUntilMs && currentUntilMs > now ? currentUntilMs : now;
@@ -101,6 +106,7 @@ function mapTable(row) {
     prepaidAmount: row.prepaid_amount != null ? Number(row.prepaid_amount) : null,
     pausedAt: row.paused_at ? new Date(row.paused_at).getTime() : null,
     pausedSeconds: row.paused_seconds != null ? Number(row.paused_seconds) : 0,
+    startedByName: row.started_by_name || "",
     extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price), costPrice: Number(e.cost_price || 0) })),
     laps: (row.table_laps || []).map(mapLap).sort((a, b) => a.end - b.end),
   };
@@ -126,6 +132,7 @@ function mapHistory(row) {
     laps: (row.laps || []).map((l) => ({ ...l, cost: Number(l.cost || 0) })),
     generalNote: row.general_note || "",
     actorName: row.actor_name || "", paymentMethod: row.payment_method || "",
+    openedByName: row.opened_by_name || "",
   };
 }
 function mapPromo(row) { return { code: row.code, durationDays: row.duration_days || 30, used: row.used, usedBy: row.used_by }; }
@@ -324,12 +331,14 @@ export default function BilliardPOS() {
                 showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
               } else {
                 const u = mapUser(data);
-                setCurrentUser(u); setSessionToken(s.token || null);
-                if (isBanned(u)) { setScreen("banned"); }
+                const accessUser = await resolveAccessUser(u);
+                setCurrentUser(u.role === "staff" ? { ...u, betaAccess: accessUser.betaAccess } : u);
+                setSessionToken(s.token || null);
+                if (isBanned(accessUser)) { setScreen("banned"); }
                 else {
-                  const od = await fetchOwnerData(u.id);
+                  const od = await fetchOwnerData(ownerIdOf(u));
                   setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
-                  setScreen(canAccess(u) ? "halls" : "subscribe");
+                  setScreen(canAccess(accessUser) ? "halls" : "subscribe");
                 }
               }
             }
@@ -475,10 +484,12 @@ export default function BilliardPOS() {
     setSessionToken(token);
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     persistSession({ userId: u.id, isAdmin: false, token });
-    if (isBanned(u)) { setScreen("banned"); return; }
-    const od = await fetchOwnerData(u.id);
+    const accessUser = await resolveAccessUser(u);
+    if (u.role === "staff") setCurrentUser({ ...u, betaAccess: accessUser.betaAccess });
+    if (isBanned(accessUser)) { setScreen("banned"); return; }
+    const od = await fetchOwnerData(ownerIdOf(u));
     setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
-    setScreen(canAccess(u) ? "halls" : "subscribe");
+    setScreen(canAccess(accessUser) ? "halls" : "subscribe");
   }
 
   function handleLogout() {
@@ -531,6 +542,7 @@ export default function BilliardPOS() {
       status: "playing", start_time: new Date().toISOString(), note: null,
       target_seconds: targetSeconds || null, prepaid_amount: prepaidAmount || null,
       paused_at: null, paused_seconds: 0,
+      started_by_name: currentUser.name,
     }).eq("id", tableId);
     await refreshOwnerData();
   }
@@ -780,6 +792,7 @@ export default function BilliardPOS() {
         extras: record.extras, extras_cost: record.extrasCost, total: record.total,
         laps: allLaps, general_note: table.note || null,
         actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
+        opened_by_name: table.startedByName || "",
       });
       if (histRes.error) {
         showToast(`❌ STOL BO'SHADI, LEKIN HISOBOTGA YOZILMADI: ${histRes.error.message} — DARHOL XABAR BERING, summa: ${fmtMoney(record.total)}`);
@@ -922,6 +935,37 @@ export default function BilliardPOS() {
     if (error || !data) { showToast("Eski parol noto'g'ri"); return; }
     showToast("Parol muvaffaqiyatli yangilandi");
   }
+  // ---- xodimlar ----
+  async function createStaffAccount(name, phone, login, password) {
+    if (!name.trim() || !login.trim() || password.length < 8) { showToast("Barcha maydonlarni to'g'ri to'ldiring (parol kamida 8 belgi)"); return; }
+    const normPhone = normalizePhone(phone) || phone.trim();
+    const { error } = await supabase.rpc("register_staff", { p_owner_id: currentUser.id, p_name: name.trim(), p_phone: normPhone, p_login: login.trim(), p_password: password });
+    if (error) { showToast(error.message.includes("LOGIN_TAKEN") ? "Bu login band" : `❌ ${error.message}`); return; }
+    showToast(`✅ ${name} uchun akaunt yaratildi`);
+    await refreshOwnerData();
+  }
+  async function deleteStaffAccount(staffId) {
+    await supabase.from("users").delete().eq("id", staffId);
+    await refreshOwnerData();
+  }
+  async function setStaffSalary(staffId, amount, payDay) {
+    const existing = staffSalaries.find((s) => s.staffId === staffId);
+    if (existing) {
+      await supabase.from("staff_salaries").update({ amount: Number(amount), pay_day: Number(payDay) }).eq("id", existing.id);
+    } else {
+      await supabase.from("staff_salaries").insert({ owner_id: currentUser.id, staff_id: staffId, amount: Number(amount), pay_day: Number(payDay) });
+    }
+    await refreshOwnerData();
+  }
+  async function markSalaryPaid(salaryId, staffId, period, amount) {
+    const r = await supabase.from("salary_payments").insert({
+      salary_id: salaryId, owner_id: currentUser.id, staff_id: staffId, period, amount,
+      actor_id: currentUser.id, actor_name: currentUser.name,
+    });
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+    showToast(`✅ Oylik berildi deb belgilandi`);
+    await refreshOwnerData();
+  }
   // ---- smena ----
   async function openShift() {
     const r = await supabase.from("shifts").insert({
@@ -1026,9 +1070,10 @@ export default function BilliardPOS() {
           onOpenHall={(id) => { setActiveHallId(id); setScreen("hall"); }}
           onLogout={handleLogout} onStats={() => setScreen("stats")}
           onWarehouse={() => setScreen("warehouse")} onDebts={() => setScreen("debts")}
-          onFinance={() => setScreen("finance")}
+          onFinance={() => setScreen("finance")} onStaff={() => setScreen("staff")}
           shifts={shifts} onOpenShift={openShift} onCloseShift={closeShift}
           history={history} warehouseLogs={warehouseLogs}
+          staffList={staffList} staffSalaries={staffSalaries} salaryPayments={salaryPayments} onMarkSalaryPaid={markSalaryPaid}
           onSupport={() => { markReadByUser(); setScreen("support"); }}
           unreadCount={userUnreadCount} onChangePassword={changeOwnPassword}
         />
@@ -1036,7 +1081,7 @@ export default function BilliardPOS() {
 
       {screen === "warehouse" && currentUser && currentUser.betaAccess && (
         <WarehouseScreen
-          bar={bar} warehouseItems={warehouseItems} warehouseLogs={warehouseLogs} shifts={shifts}
+          user={currentUser} bar={bar} warehouseItems={warehouseItems} warehouseLogs={warehouseLogs} shifts={shifts}
           onBack={() => setScreen("halls")}
           onAddStock={addStock} onRemoveStock={removeStock} onDirectSale={sellDirect} onSetThreshold={setLowStockThreshold} onToast={showToast}
         />
@@ -1049,15 +1094,25 @@ export default function BilliardPOS() {
         />
       )}
 
-      {screen === "finance" && currentUser && (
+      {screen === "finance" && currentUser && currentUser.role === "owner" && (
         <FinanceScreen
           history={history} warehouseLogs={warehouseLogs}
           onBack={() => setScreen("halls")}
         />
       )}
 
+      {screen === "staff" && currentUser && currentUser.role === "owner" && (
+        <StaffScreen
+          staffList={staffList} staffSalaries={staffSalaries} salaryPayments={salaryPayments}
+          onBack={() => setScreen("halls")}
+          onCreateStaff={createStaffAccount} onDeleteStaff={deleteStaffAccount} onSetSalary={setStaffSalary} onMarkSalaryPaid={markSalaryPaid}
+          onToast={showToast}
+        />
+      )}
+
       {screen === "hall" && currentUser && (
         <HallScreen
+          user={currentUser}
           hall={halls.find((h) => h.id === activeHallId)} allHalls={halls} bar={bar} now={now}
           onBack={() => setScreen("halls")}
           onCreateTable={(name, rate) => createTable(activeHallId, name, rate)}
@@ -1076,7 +1131,7 @@ export default function BilliardPOS() {
         />
       )}
 
-      {screen === "stats" && currentUser && <StatsScreen history={history} shifts={shifts} warehouseLogs={warehouseLogs} warehouseItems={warehouseItems} onBack={() => setScreen("halls")} />}
+      {screen === "stats" && currentUser && currentUser.role === "owner" && <StatsScreen history={history} shifts={shifts} warehouseLogs={warehouseLogs} warehouseItems={warehouseItems} onBack={() => setScreen("halls")} />}
       {screen === "support" && currentUser && <SupportScreen messages={myChat} onSend={sendUserMessage} onBack={() => setScreen("halls")} />}
 
       {screen === "admin" && isAdmin && (
@@ -1292,7 +1347,7 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onFinance, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword }) {
+function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword }) {
   const [tab, setTab] = useState("halls");
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -1340,7 +1395,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
               </span>
             )}
           </button>
-          <button onClick={onStats} title="Statistika"><BarChart3 size={18} style={{ color: "#b8c9bf" }} /></button>
+          {user.role === "owner" && <button onClick={onStats} title="Statistika"><BarChart3 size={18} style={{ color: "#b8c9bf" }} /></button>}
         </div>
       </div>
       <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
@@ -1367,9 +1422,43 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         );
       })()}
 
-      <button onClick={onFinance} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="w-full mb-4 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
-        <TrendingUp size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Moliya</span>
-      </button>
+      {user.role === "owner" && (() => {
+        const today = new Date();
+        const period = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+        const due = (staffSalaries || []).filter((s) => {
+          if (today.getDate() < s.payDay) return false;
+          return !(salaryPayments || []).some((p) => p.salaryId === s.id && p.period === period);
+        });
+        if (due.length === 0) return null;
+        return (
+          <div style={{ background: "rgba(178,58,58,0.15)", border: "1px solid #b23a3a" }} className="rounded-xl p-3 mb-4">
+            <div className="text-xs font-semibold mb-1.5" style={{ color: "#ff8a8a" }}>🔔 Oylik berish vaqti keldi</div>
+            {due.map((s) => {
+              const staff = (staffList || []).find((st) => st.id === s.staffId);
+              return (
+                <div key={s.id} className="flex items-center justify-between mb-1 last:mb-0">
+                  <span className="text-xs" style={{ color: CREAM }}>{staff ? staff.name : "?"} — {fmtMoney(s.amount)}</span>
+                  <button onClick={() => onMarkSalaryPaid(s.id, s.staffId, period, s.amount)}
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold" style={{ background: "#7bbf6a", color: FELT_DARK }}>
+                    Berdim
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {user.role === "owner" && (
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <button onClick={onFinance} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <TrendingUp size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Moliya</span>
+          </button>
+          <button onClick={onStaff} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <Users size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Xodimlar</span>
+          </button>
+        </div>
+      )}
 
       {user.betaAccess && (
         <div className="grid grid-cols-2 gap-3 mb-4">
@@ -1454,39 +1543,47 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
                   <div className="font-display font-semibold" style={{ color: CREAM }}>🎱 {h.name}</div>
                   <div className="text-xs mt-1" style={{ color: "#b8c9bf" }}>{h.tables.length} stol · {playing} band</div>
                 </button>
-                <div className="flex gap-2 mt-3">
-                  <button onClick={() => { setEditHall(h); setEditName(h.name); }} className="p-1.5 rounded-lg" style={{ background: FELT_DARK }}><Pencil size={12} style={{ color: CREAM }} /></button>
-                  <button onClick={() => { if (confirm(`"${h.name}" zalini o'chirasizmi?`)) onDeleteHall(h.id); }} className="p-1.5 rounded-lg" style={{ background: FELT_DARK }}><Trash2 size={12} style={{ color: RED }} /></button>
-                </div>
+                {user.role === "owner" && (
+                  <div className="flex gap-2 mt-3">
+                    <button onClick={() => { setEditHall(h); setEditName(h.name); }} className="p-1.5 rounded-lg" style={{ background: FELT_DARK }}><Pencil size={12} style={{ color: CREAM }} /></button>
+                    <button onClick={() => { if (confirm(`"${h.name}" zalini o'chirasizmi?`)) onDeleteHall(h.id); }} className="p-1.5 rounded-lg" style={{ background: FELT_DARK }}><Trash2 size={12} style={{ color: RED }} /></button>
+                  </div>
+                )}
               </div>
             );
           })}
-          <button onClick={() => setShowModal(true)} style={{ border: `1px dashed ${FELT_LIGHT}` }} className="rounded-2xl p-5 flex flex-col items-center justify-center gap-2 min-h-[110px]">
-            <Plus size={20} style={{ color: GOLD }} /><span className="text-xs" style={{ color: "#b8c9bf" }}>Yangi zal</span>
-          </button>
+          {user.role === "owner" && (
+            <button onClick={() => setShowModal(true)} style={{ border: `1px dashed ${FELT_LIGHT}` }} className="rounded-2xl p-5 flex flex-col items-center justify-center gap-2 min-h-[110px]">
+              <Plus size={20} style={{ color: GOLD }} /><span className="text-xs" style={{ color: "#b8c9bf" }}>Yangi zal</span>
+            </button>
+          )}
         </div>
       )}
 
       {tab === "bar" && (
         <div>
-          <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
-            <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi mahsulot qo'shish</div>
-            <div className="flex gap-2 mb-2">
-              <input value={menuName} onChange={(e) => setMenuName(e.target.value)} placeholder="Nomi, masalan Kola"
-                className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-              <input value={menuPrice} onChange={(e) => setMenuPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Sotish narxi"
-                className="w-28 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          {user.role === "owner" ? (
+            <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
+              <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi mahsulot qo'shish</div>
+              <div className="flex gap-2 mb-2">
+                <input value={menuName} onChange={(e) => setMenuName(e.target.value)} placeholder="Nomi, masalan Kola"
+                  className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+                <input value={menuPrice} onChange={(e) => setMenuPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Sotish narxi"
+                  className="w-28 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+              </div>
+              <div className="flex gap-2 mb-2">
+                <input value={menuCost} onChange={(e) => setMenuCost(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Tannarx (ixtiyoriy)"
+                  className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+              </div>
+              <button disabled={!menuName.trim() || !menuPrice}
+                onClick={() => { onAddMenuItem(menuName.trim(), Number(menuPrice), Number(menuCost) || 0); setMenuName(""); setMenuPrice(""); setMenuCost(""); }}
+                style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">
+                Qo'shish
+              </button>
             </div>
-            <div className="flex gap-2 mb-2">
-              <input value={menuCost} onChange={(e) => setMenuCost(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Tannarx (ixtiyoriy)"
-                className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-            </div>
-            <button disabled={!menuName.trim() || !menuPrice}
-              onClick={() => { onAddMenuItem(menuName.trim(), Number(menuPrice), Number(menuCost) || 0); setMenuName(""); setMenuPrice(""); setMenuCost(""); }}
-              style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">
-              Qo'shish
-            </button>
-          </div>
+          ) : (
+            <p className="text-xs mb-4" style={{ color: "#8fa398" }}>Narx va tannarxni faqat boshliq o'zgartira oladi.</p>
+          )}
           <div className="grid grid-cols-2 gap-2">
             {bar.length === 0 && <p className="text-sm opacity-50 col-span-2" style={{ color: CREAM }}>Hali mahsulot yo'q</p>}
             {bar.map((item) => (
@@ -1496,18 +1593,20 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{item.name}</div>
                     <div className="text-xs font-mono" style={{ color: item.color }}>{fmtMoney(item.price)}</div>
-                    <div className="flex items-center gap-1 mt-1">
-                      <span className="text-[10px]" style={{ color: "#8fa398" }}>Tannarx:</span>
-                      <input defaultValue={item.costPrice || ""} placeholder="0"
-                        onBlur={(e) => { if (Number(e.target.value) !== item.costPrice) onUpdateCost(item.id, e.target.value); }}
-                        className="w-16 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "#8fa398", border: `1px solid ${FELT_LIGHT}` }} />
-                      <span className="text-[10px]" style={{ color: item.price - item.costPrice >= 0 ? "#7bbf6a" : "#ff8a8a" }}>
-                        (+{fmtMoney(item.price - item.costPrice)})
-                      </span>
-                    </div>
+                    {user.role === "owner" && (
+                      <div className="flex items-center gap-1 mt-1">
+                        <span className="text-[10px]" style={{ color: "#8fa398" }}>Tannarx:</span>
+                        <input defaultValue={item.costPrice || ""} placeholder="0"
+                          onBlur={(e) => { if (Number(e.target.value) !== item.costPrice) onUpdateCost(item.id, e.target.value); }}
+                          className="w-16 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "#8fa398", border: `1px solid ${FELT_LIGHT}` }} />
+                        <span className="text-[10px]" style={{ color: item.price - item.costPrice >= 0 ? "#7bbf6a" : "#ff8a8a" }}>
+                          (+{fmtMoney(item.price - item.costPrice)})
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
-                <button onClick={() => onDeleteMenuItem(item.id)}><Trash2 size={14} style={{ color: RED }} /></button>
+                {user.role === "owner" && <button onClick={() => onDeleteMenuItem(item.id)}><Trash2 size={14} style={{ color: RED }} /></button>}
               </div>
             ))}
           </div>
@@ -1540,18 +1639,34 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
         const from = openShiftObj.openedAt;
         const periodHistory = (history || []).filter((h) => h.endTime >= from);
         const periodDirect = (warehouseLogs || []).filter((l) => l.type === "direct" && l.createdAt >= from);
-        const byMethod = { naqd: 0, karta: 0 };
-        let total = 0;
-        periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.total; total += h.total; });
-        periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; const amt = (l.sellPrice || 0) * -l.changeUnits; byMethod[m] = (byMethod[m] || 0) + amt; total += amt; });
-        return (
-          <Modal onClose={() => setShowShiftSummary(false)}>
-            <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Smenani yopish</h2>
+        const isOwner = user.role === "owner";
+        let body;
+        if (isOwner) {
+          const byMethod = { naqd: 0, karta: 0 };
+          let total = 0;
+          periodHistory.forEach((h) => { const m = h.paymentMethod || "naqd"; byMethod[m] = (byMethod[m] || 0) + h.total; total += h.total; });
+          periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; const amt = (l.sellPrice || 0) * -l.changeUnits; byMethod[m] = (byMethod[m] || 0) + amt; total += amt; });
+          body = (
             <div className="space-y-2 mb-4">
               <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
               <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
               <div className="flex justify-between text-sm font-semibold pt-2 border-t" style={{ borderColor: FELT_LIGHT, color: GOLD }}><span>Jami</span><span className="font-mono">{fmtMoney(total)}</span></div>
             </div>
+          );
+        } else {
+          const totalDuration = periodHistory.reduce((s, h) => s + h.duration, 0);
+          body = (
+            <div className="space-y-2 mb-4">
+              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Yopilgan stollar</span><span className="font-mono" style={{ color: CREAM }}>{periodHistory.length} ta</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Jami o'ynalgan vaqt</span><span className="font-mono" style={{ color: CREAM }}>{fmtDuration(totalDuration)}</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Sklad savdolari</span><span className="font-mono" style={{ color: CREAM }}>{periodDirect.length} ta</span></div>
+            </div>
+          );
+        }
+        return (
+          <Modal onClose={() => setShowShiftSummary(false)}>
+            <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Smenani yopish</h2>
+            {body}
             <button onClick={() => { onCloseShift(openShiftObj.id); setShowShiftSummary(false); }} style={{ background: RED, color: "#fff" }} className="w-full py-3 rounded-xl font-semibold text-sm">
               Smenani yopish
             </button>
@@ -1563,7 +1678,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
 }
 
 // ---------------- SKLAD ----------------
-function WarehouseScreen({ bar, warehouseItems, warehouseLogs, shifts, onBack, onAddStock, onRemoveStock, onDirectSale, onSetThreshold, onToast }) {
+function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onBack, onAddStock, onRemoveStock, onDirectSale, onSetThreshold, onToast }) {
   const [tab, setTab] = useState("stock"); // stock | report
   const [showAdd, setShowAdd] = useState(false);
   const [pickedBarItem, setPickedBarItem] = useState(null);
@@ -1649,7 +1764,9 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, shifts, onBack, o
 
       <div className="flex gap-2 mb-5">
         <button onClick={() => setTab("stock")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "stock" ? GOLD : FELT, color: tab === "stock" ? FELT_DARK : CREAM }}>Qoldiq</button>
-        <button onClick={() => setTab("report")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "report" ? GOLD : FELT, color: tab === "report" ? FELT_DARK : CREAM }}>Hisobot</button>
+        {user.role === "owner" && (
+          <button onClick={() => setTab("report")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: tab === "report" ? GOLD : FELT, color: tab === "report" ? FELT_DARK : CREAM }}>Hisobot</button>
+        )}
       </div>
 
       {tab === "stock" && (
@@ -1694,7 +1811,7 @@ function WarehouseScreen({ bar, warehouseItems, warehouseLogs, shifts, onBack, o
         </>
       )}
 
-      {tab === "report" && (
+      {tab === "report" && user.role === "owner" && (
         <div>
           <div className="flex gap-2 mb-3">
             <button onClick={() => { setReportTab("day"); setRepFrom(""); setRepTo(""); }} disabled={repCustomActive} className="flex-1 py-2 rounded-xl text-xs font-medium disabled:opacity-40" style={{ background: !repCustomActive && reportTab === "day" ? GOLD : FELT, color: !repCustomActive && reportTab === "day" ? FELT_DARK : CREAM }}>Kunlik</button>
@@ -2170,8 +2287,119 @@ function FinanceScreen({ history, warehouseLogs, onBack }) {
   );
 }
 
+// ---------------- XODIMLAR ----------------
+function StaffScreen({ staffList, staffSalaries, salaryPayments, onBack, onCreateStaff, onDeleteStaff, onSetSalary, onMarkSalaryPaid, onToast }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
+  const [salaryEdit, setSalaryEdit] = useState(null); // staffId
+  const [salaryAmount, setSalaryAmount] = useState("");
+  const [salaryDay, setSalaryDay] = useState("");
+
+  const today = new Date();
+  const period = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+
+  return (
+    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
+        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><Users size={18} style={{ color: GOLD }} /> Xodimlar</h1>
+      </div>
+
+      <button onClick={() => { setShowAdd(true); setName(""); setPhone(""); setLogin(""); setPassword(""); }}
+        style={{ background: GOLD, color: FELT_DARK }} className="w-full mb-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
+        <UserPlus size={16} /> Yangi xodim
+      </button>
+
+      {staffList.length === 0 ? (
+        <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha xodim yo'q</p>
+      ) : (
+        <div className="space-y-3">
+          {staffList.map((s) => {
+            const salary = staffSalaries.find((sal) => sal.staffId === s.id);
+            const editing = salaryEdit === s.id;
+            const payments = salaryPayments.filter((p) => p.staffId === s.id);
+            const paidThisPeriod = salary && payments.some((p) => p.salaryId === salary.id && p.period === period);
+            return (
+              <div key={s.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-sm font-medium" style={{ color: CREAM }}>{s.name}</div>
+                  <button onClick={() => { if (confirm(`"${s.name}" akauntini o'chirasizmi?`)) onDeleteStaff(s.id); }}><Trash2 size={14} style={{ color: RED }} /></button>
+                </div>
+                <div className="text-xs mb-2" style={{ color: "#b8c9bf" }}>Login: {s.login}</div>
+
+                {salary && !editing && (
+                  <div className="flex items-center justify-between mb-2 px-3 py-2 rounded-lg" style={{ background: FELT_DARK }}>
+                    <span className="text-xs" style={{ color: CREAM }}>Oylik: {fmtMoney(salary.amount)} · har oyning {salary.payDay}-kunida</span>
+                    <button onClick={() => { setSalaryEdit(s.id); setSalaryAmount(String(salary.amount)); setSalaryDay(String(salary.payDay)); }}>
+                      <Pencil size={12} style={{ color: "#b8c9bf" }} />
+                    </button>
+                  </div>
+                )}
+
+                {editing ? (
+                  <div className="mb-2 space-y-2">
+                    <div className="flex gap-2">
+                      <input type="number" value={salaryAmount} onChange={(e) => setSalaryAmount(e.target.value)} placeholder="Summa"
+                        className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+                      <input type="number" value={salaryDay} onChange={(e) => setSalaryDay(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Kuni (1-31)"
+                        className="w-28 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+                    </div>
+                    <button disabled={!salaryAmount || !salaryDay || Number(salaryDay) < 1 || Number(salaryDay) > 31}
+                      onClick={() => { onSetSalary(s.id, salaryAmount, salaryDay); setSalaryEdit(null); }}
+                      className="w-full py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: GOLD, color: FELT_DARK }}>
+                      Saqlash
+                    </button>
+                  </div>
+                ) : !salary && (
+                  <button onClick={() => { setSalaryEdit(s.id); setSalaryAmount(""); setSalaryDay(""); }}
+                    className="w-full mb-2 py-2 rounded-lg text-xs font-medium" style={{ background: FELT_DARK, color: GOLD, border: `1px solid ${FELT_LIGHT}` }}>
+                    + Oylik belgilash
+                  </button>
+                )}
+
+                {salary && !editing && (
+                  <button disabled={paidThisPeriod} onClick={() => { onMarkSalaryPaid(salary.id, s.id, period, salary.amount); }}
+                    className="w-full py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: paidThisPeriod ? FELT_DARK : "#0e4a36", color: paidThisPeriod ? "#7bbf6a" : "#7bbf6a", border: "1px solid #7bbf6a" }}>
+                    {paidThisPeriod ? `✓ Shu oy uchun berilgan` : `Bu oy uchun "Berdim"`}
+                  </button>
+                )}
+
+                {payments.length > 0 && (
+                  <div className="mt-2 pl-2 border-l-2 space-y-0.5" style={{ borderColor: FELT_LIGHT }}>
+                    {payments.slice(0, 6).map((p) => (
+                      <div key={p.id} className="text-[11px]" style={{ color: "#8fa398" }}>{p.period} — {fmtMoney(p.amount)} berildi ({fmtDate(p.paidAt)})</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showAdd && (
+        <Modal onClose={() => setShowAdd(false)}>
+          <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Yangi xodim qo'shish</h2>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ismi" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefon raqami" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input value={login} onChange={(e) => setLogin(e.target.value)} placeholder="Login (u shu bilan kiradi)" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Parol (kamida 8 belgi)" className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          <button disabled={!name.trim() || !login.trim() || password.length < 8}
+            onClick={() => { onCreateStaff(name, phone, login, password); setShowAdd(false); }}
+            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            Yaratish
+          </button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ---------------- HALL ----------------
-function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtrasBatch, onAddExtraTime, onClose, onUpdateNote, onAddLap, onToast }) {
+function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtrasBatch, onAddExtraTime, onClose, onUpdateNote, onAddLap, onToast }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editTableObj, setEditTableObj] = useState(null);
   const [tName, setTName] = useState(""); const [tRate, setTRate] = useState("");
@@ -2266,7 +2494,7 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
 
               <div className="flex justify-between items-start mb-1">
                 <div className="font-display font-semibold text-sm" style={{ color: CREAM }}>🎯 {t.name}</div>
-                {!playing && !paused && (
+                {!playing && !paused && user.role === "owner" && (
                   <div className="flex gap-1">
                     <button onClick={() => { setEditTableObj(t); setTName(t.name); setTRate(String(t.rate)); }}><Pencil size={12} style={{ color: "#b8c9bf" }} /></button>
                     <button onClick={() => { if (confirm(`"${t.name}" stolini o'chirasizmi?`)) onDeleteTable(t.id); }}><Trash2 size={12} style={{ color: RED }} /></button>
@@ -2346,9 +2574,11 @@ function HallScreen({ hall, allHalls, bar, now, onBack, onCreateTable, onEditTab
             </div>
           );
         })}
-        <button onClick={() => setShowCreate(true)} style={{ border: `1px dashed ${FELT_LIGHT}` }} className="rounded-2xl p-4 flex flex-col items-center justify-center gap-2 min-h-[150px]">
-          <Plus size={20} style={{ color: GOLD }} /><span className="text-xs" style={{ color: "#b8c9bf" }}>Stol qo'shish</span>
-        </button>
+        {user.role === "owner" && (
+          <button onClick={() => setShowCreate(true)} style={{ border: `1px dashed ${FELT_LIGHT}` }} className="rounded-2xl p-4 flex flex-col items-center justify-center gap-2 min-h-[150px]">
+            <Plus size={20} style={{ color: GOLD }} /><span className="text-xs" style={{ color: "#b8c9bf" }}>Stol qo'shish</span>
+          </button>
+        )}
       </div>
 
       {showCreate && (
@@ -2787,7 +3017,7 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
                       <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-3 py-2.5 rounded-lg text-left" style={{ background: FELT_DARK }}>
                         <div>
                           <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-                          <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.actorName ? ` · ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
+                          <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.openedByName ? ` · Ochdi: ${h.openedByName}` : ""}{h.actorName ? ` · Yopdi: ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
                         </div>
                         <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
                       </button>
@@ -2813,7 +3043,7 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
               <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-5 py-3 text-left" style={{ borderTop: `1px dashed ${FELT_LIGHT}` }}>
                 <div>
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-                  <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}{h.actorName ? ` · ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
+                  <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}{h.openedByName ? ` · Ochdi: ${h.openedByName}` : ""}{h.actorName ? ` · Yopdi: ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
                 </div>
                 <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
               </button>
@@ -3376,7 +3606,7 @@ function UserPanelView({ user, halls, bar, history, shifts }) {
                 <div key={h.id} style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 flex justify-between items-center">
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-                    <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.actorName ? ` · ${h.actorName}` : ""}</div>
+                    <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.openedByName ? ` · Ochdi: ${h.openedByName}` : ""}{h.actorName ? ` · Yopdi: ${h.actorName}` : ""}</div>
                   </div>
                   <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
                 </div>
