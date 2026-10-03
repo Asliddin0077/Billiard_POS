@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.0.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.0.1")
+const APP_VERSION = "2.0.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.0.2")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -93,7 +93,7 @@ function mapUser(row) {
     trialUsed: !!row.trial_used,
   };
 }
-function ownerIdOf(u) { return u ? u.id : null; }
+function ownerIdOf(u) { return u && u.role === "staff" && u.parentOwnerId ? u.parentOwnerId : (u ? u.id : null); }
 function mapLap(row) {
   return { id: row.id, start: new Date(row.lap_start).getTime(), end: new Date(row.lap_end).getTime(), duration: Number(row.duration_seconds), comment: row.comment || "" };
 }
@@ -1132,6 +1132,7 @@ export default function BilliardPOS() {
       )}
 
       {screen === "stats" && currentUser && currentUser.role === "owner" && <StatsScreen history={history} shifts={shifts} warehouseLogs={warehouseLogs} warehouseItems={warehouseItems} onBack={() => setScreen("halls")} />}
+      {screen === "stats" && currentUser && currentUser.role !== "owner" && <StaffDailyStats history={history} warehouseLogs={warehouseLogs} warehouseItems={warehouseItems} onBack={() => setScreen("halls")} />}
       {screen === "support" && currentUser && <SupportScreen messages={myChat} onSend={sendUserMessage} onBack={() => setScreen("halls")} />}
 
       {screen === "admin" && isAdmin && (
@@ -1395,7 +1396,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
               </span>
             )}
           </button>
-          {user.role === "owner" && <button onClick={onStats} title="Statistika"><BarChart3 size={18} style={{ color: "#b8c9bf" }} /></button>}
+          <button onClick={onStats} title="Statistika"><BarChart3 size={18} style={{ color: "#b8c9bf" }} /></button>
         </div>
       </div>
       <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
@@ -2922,6 +2923,55 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
 }
 
 // ---------------- STATS ----------------
+function businessDayRange(now) {
+  const d = new Date(now);
+  if (d.getHours() < 8) d.setDate(d.getDate() - 1);
+  d.setHours(8, 0, 0, 0);
+  const start = d.getTime();
+  return [start, start + 24 * 3600 * 1000];
+}
+function StaffDailyStats({ history, warehouseLogs, warehouseItems, onBack }) {
+  const [selected, setSelected] = useState(null);
+  const [start, end] = businessDayRange(Date.now());
+  const directEntries = (warehouseLogs || []).filter((l) => l.type === "direct").map((l) => {
+    const wi = (warehouseItems || []).find((w) => w.id === l.warehouseItemId);
+    const qty = -l.changeUnits;
+    const total = (l.sellPrice || 0) * qty;
+    return { id: `wl-${l.id}`, hallName: "Sklad", tableName: wi ? `${wi.name} × ${qty}` : `Mahsulot × ${qty}`, startTime: l.createdAt, endTime: l.createdAt, duration: 0, tableCost: 0, extras: [], extrasCost: total, total, laps: [], generalNote: l.note || "" };
+  });
+  const todays = [...history, ...directEntries].filter((h) => h.endTime >= start && h.endTime < end).sort((a, b) => b.endTime - a.endTime);
+  const total = todays.reduce((s, h) => s + h.total, 0);
+  return (
+    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
+      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
+      <h1 className="font-display text-2xl font-semibold mb-1" style={{ color: CREAM }}>Bugungi hisobot</h1>
+      <p className="text-xs mb-6" style={{ color: "#8fa398" }}>08:00 dan hozirgacha</p>
+      <div style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}`, borderRadius: 16 }} className="p-4 mb-5 flex justify-between items-center">
+        <span className="text-sm font-semibold" style={{ color: GOLD }}>{todays.length} ta yozuv</span>
+        <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(total)}</span>
+      </div>
+      <div className="space-y-2">
+        {todays.length === 0 && <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hali bugun yozuv yo'q</p>}
+        {todays.map((h) => (
+          <button key={h.id} onClick={() => setSelected(h)} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14 }} className="w-full p-3.5 flex justify-between items-center text-left">
+            <div>
+              <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
+              <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}</div>
+            </div>
+            <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
+          </button>
+        ))}
+      </div>
+      {selected && (
+        <Modal onClose={() => setSelected(null)}>
+          <ReceiptView title={`${selected.hallName} · ${selected.tableName}`} start={selected.startTime} end={selected.endTime}
+            duration={selected.duration} tableCost={selected.tableCost} extras={selected.extras} extrasCost={selected.extrasCost}
+            laps={selected.laps} generalNote={selected.generalNote} />
+        </Modal>
+      )}
+    </div>
+  );
+}
 function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack }) {
   const [selected, setSelected] = useState(null);
   const [fromDate, setFromDate] = useState("");
