@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.2.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.2.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -1038,8 +1038,21 @@ export default function BilliardPOS() {
       supabase.from("tournament_players").select("*").eq("tournament_id", tournamentId).order("seed"),
       supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).order("round").order("slot"),
     ]);
-    setTPlayers((pRes.data || []).map(mapTPlayer));
-    const matchList = (mRes.data || []).map(mapTMatch);
+    if (pRes.error || mRes.error) { showToast(`❌ Musobaqani yuklashda xatolik: ${(pRes.error || mRes.error).message}`); }
+    const playerList = (pRes.data || []).map(mapTPlayer);
+    setTPlayers(playerList);
+    let matchList = (mRes.data || []).map(mapTMatch);
+    // Avvalgi xato tufayli juftliklar yozilmay qolgan turnirni avtomatik tiklaymiz
+    if (matchList.length === 0 && playerList.length >= 2 && !mRes.error) {
+      const t = tournaments.find((x) => x.id === tournamentId);
+      if (!t || t.status === "active") {
+        const ok = await generateRoundMatches(tournamentId, 1, playerList.map((p) => p.id));
+        if (ok) {
+          const again = await supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).order("round").order("slot");
+          matchList = (again.data || []).map(mapTMatch);
+        }
+      }
+    }
     setTMatches(matchList);
     const matchIds = matchList.map((m) => m.id);
     const gRes = matchIds.length > 0 ? await supabase.from("tournament_match_games").select("*").in("match_id", matchIds).order("game_number") : { data: [] };
@@ -1051,18 +1064,21 @@ export default function BilliardPOS() {
       showToast(`🏆 Turnir tugadi!`);
       return;
     }
+    // Barcha qatorlarda bir xil ustunlar bo'lishi shart (aks holda ommaviy yozish buziladi)
     const rows = [];
     let slot = 0;
     for (let i = 0; i < participantIds.length; i += 2) {
       if (i + 1 < participantIds.length) {
-        rows.push({ tournament_id: tournamentId, round, slot, player1_id: participantIds[i], player2_id: participantIds[i + 1] });
+        rows.push({ tournament_id: tournamentId, round, slot, player1_id: participantIds[i], player2_id: participantIds[i + 1], winner_id: null, status: "pending" });
       } else {
         // toq qolgan ishtirokchi — o'yinsiz keyingi bosqichga o'tadi
         rows.push({ tournament_id: tournamentId, round, slot, player1_id: participantIds[i], player2_id: null, winner_id: participantIds[i], status: "done" });
       }
       slot++;
     }
-    await supabase.from("tournament_matches").insert(rows);
+    const res = await supabase.from("tournament_matches").insert(rows);
+    if (res.error) { showToast(`❌ Juftliklar yozilmadi: ${res.error.message}`); return false; }
+    return true;
   }
   async function checkRoundCompleteAndAdvance(tournamentId, round) {
     const { data: roundMatches } = await supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).eq("round", round);
@@ -2736,6 +2752,7 @@ function TournamentView({ tournament, players, matches, games, halls, onBack, on
   const totalRounds = Math.max(...matches.map((m) => m.round), 1);
   // Bosqich nomi — shu bosqichdagi o'yinlar soniga qarab (keyingi bosqichlar hali yaratilmagan bo'lishi mumkin)
   function roundLabel(r, count) {
+    if (count === 0) return "Juftliklar topilmadi";
     if (count === 1) return "🏆 Final";
     if (count === 2) return "Yarim final";
     if (count <= 4) return "Chorak final";
