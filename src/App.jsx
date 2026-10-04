@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.1.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.1.1")
+const APP_VERSION = "2.2.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -133,6 +133,7 @@ function mapHistory(row) {
     generalNote: row.general_note || "",
     actorName: row.actor_name || "", paymentMethod: row.payment_method || "",
     openedByName: row.opened_by_name || "",
+    tournamentName: row.tournament_name || "",
   };
 }
 function mapPromo(row) { return { code: row.code, durationDays: row.duration_days || 30, used: row.used, usedBy: row.used_by }; }
@@ -175,6 +176,9 @@ function mapTournament(row) {
     createdAt: new Date(row.created_at).getTime(), completedAt: row.completed_at ? new Date(row.completed_at).getTime() : null };
 }
 function mapTPlayer(row) { return { id: row.id, tournamentId: row.tournament_id, name: row.name, seed: row.seed }; }
+function mapTGame(row) {
+  return { id: row.id, matchId: row.match_id, gameNumber: row.game_number, p1Score: Number(row.player1_score), p2Score: Number(row.player2_score), winnerId: row.winner_id };
+}
 function mapTMatch(row) {
   return { id: row.id, tournamentId: row.tournament_id, round: row.round, slot: row.slot,
     player1Id: row.player1_id, player2Id: row.player2_id, winnerId: row.winner_id,
@@ -305,6 +309,9 @@ export default function BilliardPOS() {
   const [activeTournamentId, setActiveTournamentId] = useState(null);
   const [tPlayers, setTPlayers] = useState([]);
   const [tMatches, setTMatches] = useState([]);
+  const [tGames, setTGames] = useState([]);
+  const [p1ScoreInput, setP1ScoreInput] = useState("");
+  const [p2ScoreInput, setP2ScoreInput] = useState("");
   const [pendingMatchResult, setPendingMatchResult] = useState(null);
   const [history, setHistory] = useState([]);
   const [myChat, setMyChat] = useState([]);
@@ -1018,6 +1025,10 @@ export default function BilliardPOS() {
     await refreshOwnerData();
   }
   // ---- musobaqa ----
+  function findHallIdForTable(tableId) {
+    for (const h of halls) { if (h.tables.some((t) => t.id === tableId)) return h.id; }
+    return null;
+  }
   async function fetchTournamentsList() {
     const { data } = await supabase.from("tournaments").select("*").eq("owner_id", ownerIdOf(currentUser)).order("created_at", { ascending: false });
     setTournaments((data || []).map(mapTournament));
@@ -1028,12 +1039,44 @@ export default function BilliardPOS() {
       supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).order("round").order("slot"),
     ]);
     setTPlayers((pRes.data || []).map(mapTPlayer));
-    setTMatches((mRes.data || []).map(mapTMatch));
+    const matchList = (mRes.data || []).map(mapTMatch);
+    setTMatches(matchList);
+    const matchIds = matchList.map((m) => m.id);
+    const gRes = matchIds.length > 0 ? await supabase.from("tournament_match_games").select("*").in("match_id", matchIds).order("game_number") : { data: [] };
+    setTGames((gRes.data || []).map(mapTGame));
+  }
+  async function generateRoundMatches(tournamentId, round, participantIds) {
+    if (participantIds.length <= 1) {
+      await supabase.from("tournaments").update({ status: "completed", completed_at: new Date().toISOString() }).eq("id", tournamentId);
+      showToast(`🏆 Turnir tugadi!`);
+      return;
+    }
+    const rows = [];
+    let slot = 0;
+    for (let i = 0; i < participantIds.length; i += 2) {
+      if (i + 1 < participantIds.length) {
+        rows.push({ tournament_id: tournamentId, round, slot, player1_id: participantIds[i], player2_id: participantIds[i + 1] });
+      } else {
+        // toq qolgan ishtirokchi — o'yinsiz keyingi bosqichga o'tadi
+        rows.push({ tournament_id: tournamentId, round, slot, player1_id: participantIds[i], player2_id: null, winner_id: participantIds[i], status: "done" });
+      }
+      slot++;
+    }
+    await supabase.from("tournament_matches").insert(rows);
+  }
+  async function checkRoundCompleteAndAdvance(tournamentId, round) {
+    const { data: roundMatches } = await supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).eq("round", round);
+    if (!roundMatches || roundMatches.length === 0) return;
+    if (!roundMatches.every((m) => m.status === "done")) return;
+    const { data: nextExisting } = await supabase.from("tournament_matches").select("id").eq("tournament_id", tournamentId).eq("round", round + 1).limit(1);
+    if (nextExisting && nextExisting.length > 0) return;
+    const winners = [...roundMatches].sort((a, b) => a.slot - b.slot).map((m) => m.winner_id);
+    await generateRoundMatches(tournamentId, round + 1, winners);
   }
   async function createTournament(name, playerNamesRaw) {
     const names = playerNamesRaw.map((n) => n.trim()).filter(Boolean);
     const N = names.length;
-    if (N < 2 || (N & (N - 1)) !== 0) { showToast("❌ Ishtirokchilar soni 2, 4, 8, 16, 32... bo'lishi kerak"); return; }
+    if (N < 2) { showToast("❌ Kamida 2 ishtirokchi kerak"); return; }
     const shuffled = [...names];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -1047,21 +1090,8 @@ export default function BilliardPOS() {
     const playerRows = shuffled.map((nm, idx) => ({ tournament_id: tournamentId, name: nm, seed: idx + 1 }));
     const { data: pData, error: pErr } = await supabase.from("tournament_players").insert(playerRows).select();
     if (pErr) { showToast(`❌ Xatolik: ${pErr.message}`); return; }
-    const sortedPlayers = [...pData].sort((a, b) => a.seed - b.seed);
-    const totalRounds = Math.log2(N);
-    const matchRows = [];
-    for (let r = 1; r <= totalRounds; r++) {
-      const matchesInRound = N / Math.pow(2, r);
-      for (let k = 0; k < matchesInRound; k++) {
-        if (r === 1) {
-          matchRows.push({ tournament_id: tournamentId, round: r, slot: k, player1_id: sortedPlayers[2 * k].id, player2_id: sortedPlayers[2 * k + 1].id });
-        } else {
-          matchRows.push({ tournament_id: tournamentId, round: r, slot: k });
-        }
-      }
-    }
-    const { error: mErr } = await supabase.from("tournament_matches").insert(matchRows);
-    if (mErr) { showToast(`❌ Xatolik: ${mErr.message}`); return; }
+    const sortedIds = [...pData].sort((a, b) => a.seed - b.seed).map((p) => p.id);
+    await generateRoundMatches(tournamentId, 1, sortedIds);
     showToast(`✅ Turnir yaratildi — ${N} ishtirokchi`);
     await fetchTournamentsList();
     setActiveTournamentId(tournamentId);
@@ -1084,21 +1114,43 @@ export default function BilliardPOS() {
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     await fetchTournamentDetail(activeTournamentId);
   }
-  async function declareMatchWinner(matchId, winnerId) {
+  function openResultEntry(matchId) {
+    const m = tMatches.find((x) => x.id === matchId);
+    if (!m) return;
+    const t = tournaments.find((x) => x.id === m.tournamentId);
+    setP1ScoreInput(""); setP2ScoreInput("");
+    setPendingMatchResult({
+      matchId, tournamentId: m.tournamentId, tournamentName: t ? t.name : "",
+      player1: tPlayers.find((p) => p.id === m.player1Id) || null, player2: tPlayers.find((p) => p.id === m.player2Id) || null,
+    });
+  }
+  async function recordPartiyaResult(matchId, p1ScoreRaw, p2ScoreRaw, isFinal) {
     const match = tMatches.find((m) => m.id === matchId);
     if (!match) return;
-    await supabase.from("tournament_matches").update({ status: "done", winner_id: winnerId }).eq("id", matchId);
-    const nextRound = match.round + 1;
-    const nextSlot = Math.floor(match.slot / 2);
-    const isFirstSlot = match.slot % 2 === 0;
-    const nextMatch = tMatches.find((m) => m.tournamentId === match.tournamentId && m.round === nextRound && m.slot === nextSlot);
-    if (nextMatch) {
-      await supabase.from("tournament_matches").update(isFirstSlot ? { player1_id: winnerId } : { player2_id: winnerId }).eq("id", nextMatch.id);
-    } else {
-      await supabase.from("tournaments").update({ status: "completed", completed_at: new Date().toISOString() }).eq("id", match.tournamentId);
-      showToast(`🏆 Turnir tugadi!`);
+    const p1Score = Number(p1ScoreRaw) || 0, p2Score = Number(p2ScoreRaw) || 0;
+    const gameWinnerId = p1Score >= p2Score ? match.player1Id : match.player2Id;
+    const existingGames = tGames.filter((g) => g.matchId === matchId);
+    const gameNumber = existingGames.length + 1;
+    const r = await supabase.from("tournament_match_games").insert({
+      match_id: matchId, game_number: gameNumber, player1_score: p1Score, player2_score: p2Score, winner_id: gameWinnerId,
+    });
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
+
+    if (!isFinal) {
+      const hallId = findHallIdForTable(match.tableId);
+      if (hallId) await startTable(hallId, match.tableId, null, null);
+      showToast(`✅ ${gameNumber}-partiya yozildi — keyingisi boshlandi`);
+      await fetchTournamentDetail(match.tournamentId);
+      return;
     }
-    await fetchTournamentDetail(activeTournamentId);
+
+    const allWins = [...existingGames.map((g) => g.winnerId), gameWinnerId];
+    const p1Wins = allWins.filter((id) => id === match.player1Id).length;
+    const p2Wins = allWins.filter((id) => id === match.player2Id).length;
+    const matchWinnerId = p1Wins >= p2Wins ? match.player1Id : match.player2Id;
+    await supabase.from("tournament_matches").update({ status: "done", winner_id: matchWinnerId }).eq("id", matchId);
+    await checkRoundCompleteAndAdvance(match.tournamentId, match.round);
+    await fetchTournamentDetail(match.tournamentId);
     await fetchTournamentsList();
   }
   async function changeAdminPassword(oldPass, newPass) {
@@ -1169,18 +1221,29 @@ export default function BilliardPOS() {
       {pendingMatchResult && (
         <Modal onClose={null}>
           <h2 className="font-display text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: CREAM }}>🏆 {pendingMatchResult.tournamentName}</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>O'yin tugadi — kim g'olib bo'ldi?</p>
-          <div className="space-y-2">
-            {[pendingMatchResult.player1, pendingMatchResult.player2].filter(Boolean).map((p) => (
-              <button key={p.id} onClick={async () => { await declareMatchWinner(pendingMatchResult.matchId, p.id); setPendingMatchResult(null); }}
-                style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm">
-                {p.name} g'olib
-              </button>
-            ))}
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Partiya natijasi — har birining hisobini kiriting</p>
+          <div className="mb-3">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>{pendingMatchResult.player1 ? pendingMatchResult.player1.name : "1-o'yinchi"}:</label>
+            <input type="number" value={p1ScoreInput} onChange={(e) => setP1ScoreInput(e.target.value)} placeholder="0"
+              className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
-          <button onClick={() => setPendingMatchResult(null)} className="w-full mt-3 py-2 rounded-xl text-xs" style={{ background: FELT_DARK, color: "#8fa398" }}>
-            Keyinroq belgilayman
-          </button>
+          <div className="mb-4">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>{pendingMatchResult.player2 ? pendingMatchResult.player2.name : "2-o'yinchi"}:</label>
+            <input type="number" value={p2ScoreInput} onChange={(e) => setP2ScoreInput(e.target.value)} placeholder="0"
+              className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          </div>
+          <div className="flex gap-2">
+            <button disabled={p1ScoreInput === "" || p2ScoreInput === ""}
+              onClick={async () => { await recordPartiyaResult(pendingMatchResult.matchId, p1ScoreInput, p2ScoreInput, false); setPendingMatchResult(null); setP1ScoreInput(""); setP2ScoreInput(""); }}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold disabled:opacity-40" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+              Keyingi partiya
+            </button>
+            <button disabled={p1ScoreInput === "" || p2ScoreInput === ""}
+              onClick={async () => { await recordPartiyaResult(pendingMatchResult.matchId, p1ScoreInput, p2ScoreInput, true); setPendingMatchResult(null); setP1ScoreInput(""); setP2ScoreInput(""); }}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold disabled:opacity-40" style={{ background: GOLD, color: FELT_DARK }}>
+              O'yin tugadi
+            </button>
+          </div>
         </Modal>
       )}
 
@@ -1258,9 +1321,9 @@ export default function BilliardPOS() {
       {screen === "tournament" && currentUser && (
         <TournamentView
           tournament={tournaments.find((t) => t.id === activeTournamentId)}
-          players={tPlayers} matches={tMatches} halls={halls}
+          players={tPlayers} matches={tMatches} games={tGames} halls={halls}
           onBack={() => setScreen("tournaments")}
-          onStartMatch={startTournamentMatch} onDeclareWinner={declareMatchWinner}
+          onStartMatch={startTournamentMatch} onEnterResult={openResultEntry}
           onGoToTable={(hallId) => { setActiveHallId(hallId); setScreen("hall"); }}
           onDelete={deleteTournament} onToast={showToast}
         />
@@ -2584,7 +2647,7 @@ function TournamentsScreen({ tournaments, onBack, onOpen, onCreate, onToast }) {
   const [namesText, setNamesText] = useState("");
   const names = namesText.split("\n").map((n) => n.trim()).filter(Boolean);
   const N = names.length;
-  const isPow2 = N >= 2 && (N & (N - 1)) === 0;
+  const isPow2 = N >= 2; // istalgan son (2 dan ko'p) — toq bo'lsa bittasi o'yinsiz keyingi bosqichga o'tadi
 
   const active = tournaments.filter((t) => t.status === "active");
   const completed = tournaments.filter((t) => t.status === "completed");
@@ -2646,7 +2709,7 @@ function TournamentsScreen({ tournaments, onBack, onOpen, onCreate, onToast }) {
           <textarea value={namesText} onChange={(e) => setNamesText(e.target.value)} rows={8} placeholder={"Aziz\nBobur\nDavron\nElyor\n..."}
             className="w-full mb-2 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <p className="text-xs mb-4" style={{ color: isPow2 ? "#7bbf6a" : N > 0 ? "#ff8a8a" : "#8fa398" }}>
-            {N} kishi {N > 0 && !isPow2 ? "— soni 2, 4, 8, 16, 32... bo'lishi kerak" : N > 0 ? "— qura tashlanadi" : ""}
+            {N} kishi {N === 1 ? "— kamida 2 kishi kerak" : N > 1 ? `— ${Math.floor(N / 2)} ta juftlik${N % 2 === 1 ? ", 1 kishi o'yinsiz o'tadi" : ""}` : ""}
           </p>
           <button disabled={!isPow2}
             onClick={() => { onCreate(name, names); setShowCreate(false); }}
@@ -2660,7 +2723,7 @@ function TournamentsScreen({ tournaments, onBack, onOpen, onCreate, onToast }) {
 }
 
 // ---------------- MUSOBAQA SETKASI ----------------
-function TournamentView({ tournament, players, matches, halls, onBack, onStartMatch, onDeclareWinner, onGoToTable, onDelete, onToast }) {
+function TournamentView({ tournament, players, matches, games, halls, onBack, onStartMatch, onEnterResult, onGoToTable, onDelete, onToast }) {
   const [pickTableFor, setPickTableFor] = useState(null); // matchId
   if (!tournament) return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
@@ -2671,14 +2734,19 @@ function TournamentView({ tournament, players, matches, halls, onBack, onStartMa
 
   function playerName(id) { const p = players.find((x) => x.id === id); return p ? p.name : null; }
   const totalRounds = Math.max(...matches.map((m) => m.round), 1);
-  function roundLabel(r) {
-    if (r === totalRounds) return "🏆 Final";
-    if (r === totalRounds - 1) return "Yarim final";
-    if (r === totalRounds - 2) return "Chorak final";
+  // Bosqich nomi — shu bosqichdagi o'yinlar soniga qarab (keyingi bosqichlar hali yaratilmagan bo'lishi mumkin)
+  function roundLabel(r, count) {
+    if (count === 1) return "🏆 Final";
+    if (count === 2) return "Yarim final";
+    if (count <= 4) return "Chorak final";
     return `${r}-bosqich`;
   }
   const rounds = [];
   for (let r = 1; r <= totalRounds; r++) rounds.push(matches.filter((m) => m.round === r).sort((a, b) => a.slot - b.slot));
+  function tally(matchId, m) {
+    const gs = (games || []).filter((g) => g.matchId === matchId);
+    return { total: gs.length, p1: gs.filter((g) => g.winnerId === m.player1Id).length, p2: gs.filter((g) => g.winnerId === m.player2Id).length };
+  }
 
   function findHallIdForTable(tableId) {
     for (const h of halls) { if (h.tables.some((t) => t.id === tableId)) return h.id; }
@@ -2703,34 +2771,65 @@ function TournamentView({ tournament, players, matches, halls, onBack, onStartMa
       <div className="space-y-6">
         {rounds.map((roundMatches, idx) => (
           <div key={idx}>
-            <div className="text-xs uppercase tracking-wide mb-2" style={{ color: GOLD }}>{roundLabel(idx + 1)}</div>
+            <div className="text-xs uppercase tracking-wide mb-2" style={{ color: GOLD }}>{roundLabel(idx + 1, roundMatches.length)}</div>
             <div className="space-y-2">
               {roundMatches.map((m) => {
                 const p1 = playerName(m.player1Id);
                 const p2 = playerName(m.player2Id);
                 const ready = p1 && p2;
+                const isBye = !m.player2Id && m.status === "done";
+                const t = tally(m.id, m);
+                if (isBye) {
+                  return (
+                    <div key={m.id} style={{ background: FELT, border: `1px dashed ${FELT_LIGHT}`, borderRadius: 14 }} className="p-3.5 flex items-center justify-between">
+                      <span className="text-sm font-medium" style={{ color: GOLD }}>{p1}</span>
+                      <span className="text-[11px]" style={{ color: "#8fa398" }}>o'yinsiz keyingi bosqichga o'tdi</span>
+                    </div>
+                  );
+                }
                 return (
                   <div key={m.id} style={{ background: FELT, border: `1px solid ${m.status === "live" ? "#7bbf6a" : FELT_LIGHT}`, borderRadius: 14 }} className="p-3.5">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-medium" style={{ color: m.winnerId === m.player1Id ? GOLD : CREAM }}>{p1 || "?"}</span>
-                      {m.winnerId === m.player1Id && <Trophy size={13} style={{ color: GOLD }} />}
+                      <div className="flex items-center gap-2">
+                        {t.total > 0 && <span className="font-mono text-sm font-semibold" style={{ color: CREAM }}>{t.p1}</span>}
+                        {m.winnerId === m.player1Id && <Trophy size={13} style={{ color: GOLD }} />}
+                      </div>
                     </div>
                     <div className="text-[10px] text-center opacity-50 mb-1" style={{ color: CREAM }}>vs</div>
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium" style={{ color: m.winnerId === m.player2Id ? GOLD : CREAM }}>{p2 || "?"}</span>
-                      {m.winnerId === m.player2Id && <Trophy size={13} style={{ color: GOLD }} />}
+                      <div className="flex items-center gap-2">
+                        {t.total > 0 && <span className="font-mono text-sm font-semibold" style={{ color: CREAM }}>{t.p2}</span>}
+                        {m.winnerId === m.player2Id && <Trophy size={13} style={{ color: GOLD }} />}
+                      </div>
                     </div>
+                    {t.total > 0 && (
+                      <div className="text-[10px] text-center mb-2" style={{ color: "#8fa398" }}>
+                        {(games || []).filter((g) => g.matchId === m.id).map((g) => `${g.p1Score}:${g.p2Score}`).join(" · ")}
+                      </div>
+                    )}
                     {m.status === "pending" && ready && (
                       <button onClick={() => setPickTableFor(m.id)} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2 rounded-lg text-xs font-semibold">
                         Boshlash
                       </button>
                     )}
-                    {m.status === "live" && (
-                      <button onClick={() => onGoToTable(findHallIdForTable(m.tableId))}
-                        className="w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5" style={{ background: "rgba(123,191,106,0.18)", color: "#7bbf6a" }}>
-                        🔴 O'ynalmoqda — {m.hallName} · {m.tableName}
-                      </button>
-                    )}
+                    {m.status === "live" && (() => {
+                      const hall = halls.find((h) => h.tables.some((tb) => tb.id === m.tableId));
+                      const tbl = hall ? hall.tables.find((tb) => tb.id === m.tableId) : null;
+                      const tableFree = tbl && tbl.status === "free";
+                      return tableFree ? (
+                        <button onClick={() => onEnterResult(m.id)}
+                          className="w-full py-2 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>
+                          Natijani kiritish
+                        </button>
+                      ) : (
+                        <button onClick={() => onGoToTable(findHallIdForTable(m.tableId))}
+                          className="w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5" style={{ background: "rgba(123,191,106,0.18)", color: "#7bbf6a" }}>
+                          🔴 O'ynalmoqda — {m.hallName} · {m.tableName}
+                        </button>
+                      );
+                    })()}
                     {m.status === "done" && (
                       <div className="text-[11px] text-center" style={{ color: "#8fa398" }}>Yakunlandi</div>
                     )}
@@ -3383,7 +3482,14 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
   const rangeList = rangeActive ? filtered.filter((h) => h.endTime >= rangeStart && h.endTime <= rangeEnd) : [];
   const rangeSummary = summarize(rangeList);
 
-  function groupByShift(list) {
+  function groupByShift(fullList) {
+    // Turnir o'yinlarini alohida guruhga ajratamiz (smena guruhlari bilan yonma-yon, ichiga emas)
+    const tournamentMap = {};
+    const list = [];
+    fullList.forEach((h) => {
+      if (h.tournamentName) (tournamentMap[h.tournamentName] = tournamentMap[h.tournamentName] || []).push(h);
+      else list.push(h);
+    });
     const sorted = [...(shifts || [])].sort((a, b) => b.openedAt - a.openedAt);
     const groups = []; const used = new Set();
     sorted.forEach((s) => {
@@ -3393,6 +3499,12 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
         items.forEach((h) => used.add(h.id));
       }
     });
+    Object.entries(tournamentMap).forEach(([tName, items]) => {
+      const sortedItems = [...items].sort((a, b) => b.endTime - a.endTime);
+      groups.push({ key: `t-${tName}`, isTournament: true, label: tName, items: sortedItems, total: items.reduce((sum, h) => sum + h.total, 0) });
+    });
+    const latest = (g) => Math.max(...g.items.map((i) => i.endTime));
+    groups.sort((a, b) => latest(b) - latest(a));
     const rest = list.filter((h) => !used.has(h.id));
     if (rest.length > 0) groups.push({ key: "none", label: "Smenaga bog'liq emas", items: rest, total: rest.reduce((sum, h) => sum + h.total, 0) });
     return groups;
@@ -3433,7 +3545,7 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
               {shiftGroups.map((g) => (
                 <div key={g.key}>
                   <div className="flex justify-between items-center mb-1.5 px-1">
-                    <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
+                    <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>{g.isTournament ? `🏆 Turnir: ${g.label}` : `🕒 Smena: ${g.label}`}</span>
                     <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
                   </div>
                   <div className="space-y-1.5">
@@ -3460,7 +3572,7 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
         {allShiftGroups.map((g) => (
           <div key={g.key} className="pt-3">
             <div className="flex justify-between items-center px-5 pb-2">
-              <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
+              <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>{g.isTournament ? `🏆 Turnir: ${g.label}` : `🕒 Smena: ${g.label}`}</span>
               <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
             </div>
             {g.items.map((h) => (
