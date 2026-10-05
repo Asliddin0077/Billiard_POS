@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.2.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.3.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -2741,6 +2741,7 @@ function TournamentsScreen({ tournaments, onBack, onOpen, onCreate, onToast }) {
 // ---------------- MUSOBAQA SETKASI ----------------
 function TournamentView({ tournament, players, matches, games, halls, onBack, onStartMatch, onEnterResult, onGoToTable, onDelete, onToast }) {
   const [pickTableFor, setPickTableFor] = useState(null); // matchId
+  const [selectedId, setSelectedId] = useState(null);
   if (!tournament) return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
       <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
@@ -2748,27 +2749,149 @@ function TournamentView({ tournament, players, matches, games, halls, onBack, on
     </div>
   );
 
+  // ---- o'lchamlar ----
+  const CARD_W = 200, COL_W = 250, CARD_H = 56, HEAD_H = 18, FOOT_H = 18;
+  const BLOCK_H = HEAD_H + CARD_H + FOOT_H, ROW_H = BLOCK_H + 14, TOP_PAD = 34;
+
   function playerName(id) { const p = players.find((x) => x.id === id); return p ? p.name : null; }
-  const totalRounds = Math.max(...matches.map((m) => m.round), 1);
-  // Bosqich nomi — shu bosqichdagi o'yinlar soniga qarab (keyingi bosqichlar hali yaratilmagan bo'lishi mumkin)
-  function roundLabel(r, count) {
-    if (count === 0) return "Juftliklar topilmadi";
-    if (count === 1) return "🏆 Final";
-    if (count === 2) return "Yarim final";
-    if (count <= 4) return "Chorak final";
-    return `${r}-bosqich`;
+  function findHallIdForTable(tableId) {
+    for (const h of halls) { if (h.tables.some((t) => t.id === tableId)) return h.id; }
+    return null;
   }
-  const rounds = [];
-  for (let r = 1; r <= totalRounds; r++) rounds.push(matches.filter((m) => m.round === r).sort((a, b) => a.slot - b.slot));
   function tally(matchId, m) {
     const gs = (games || []).filter((g) => g.matchId === matchId);
     return { total: gs.length, p1: gs.filter((g) => g.winnerId === m.player1Id).length, p2: gs.filter((g) => g.winnerId === m.player2Id).length };
   }
 
-  function findHallIdForTable(tableId) {
-    for (const h of halls) { if (h.tables.some((t) => t.id === tableId)) return h.id; }
-    return null;
+  // ---- setka tuzilmasi (hali yaratilmagan bosqichlar ham oldindan chiziladi) ----
+  const N = tournament.playerCount;
+  const r1Existing = matches.filter((m) => m.round === 1).length;
+  const R1 = r1Existing > 0 ? r1Existing : Math.ceil(N / 2);
+  const rowsPer = [R1];
+  while (rowsPer[rowsPer.length - 1] > 1) rowsPer.push(Math.ceil(rowsPer[rowsPer.length - 1] / 2));
+  const roundsCount = rowsPer.length;
+  const byKey = {};
+  matches.forEach((m) => { byKey[`${m.round}-${m.slot}`] = m; });
+
+  function isByeSlot(r, k) {
+    if (r === 1) return N % 2 === 1 && k === R1 - 1;
+    return rowsPer[r - 2] % 2 === 1 && k === rowsPer[r - 1] - 1;
   }
+  function roundLabel(r) {
+    const c = rowsPer[r - 1];
+    if (c === 1) return "🏆 Final";
+    if (c === 2) return "Yarim final";
+    if (c <= 4) return "Chorak final";
+    return `${r}-bosqich`;
+  }
+
+  // o'yin raqamlari (o'yinsiz o'tuvchilarga raqam berilmaydi)
+  const numberOf = {};
+  let counter = 0;
+  for (let r = 1; r <= roundsCount; r++) for (let k = 0; k < rowsPer[r - 1]; k++) { if (!isByeSlot(r, k)) numberOf[`${r}-${k}`] = ++counter; }
+
+  // vertikal joylashuv: keyingi bosqich o'yini ikki oldingi o'yin o'rtasida turadi
+  const topY = {};
+  for (let k = 0; k < rowsPer[0]; k++) topY[`1-${k}`] = TOP_PAD + k * ROW_H;
+  for (let r = 2; r <= roundsCount; r++) {
+    for (let k = 0; k < rowsPer[r - 1]; k++) {
+      const f1 = topY[`${r - 1}-${2 * k}`];
+      const hasF2 = 2 * k + 1 < rowsPer[r - 2];
+      const f2 = hasF2 ? topY[`${r - 1}-${2 * k + 1}`] : f1;
+      topY[`${r}-${k}`] = (f1 + f2) / 2;
+    }
+  }
+  const cardCenter = (key) => topY[key] + HEAD_H + CARD_H / 2;
+  const totalH = TOP_PAD + rowsPer[0] * ROW_H;
+  const totalW = (roundsCount - 1) * COL_W + CARD_W + 4;
+
+  // bog'lovchi chiziqlar
+  const paths = [];
+  for (let r = 2; r <= roundsCount; r++) {
+    for (let k = 0; k < rowsPer[r - 1]; k++) {
+      const cy = cardCenter(`${r}-${k}`);
+      const xFeed = (r - 2) * COL_W + CARD_W;
+      const xChild = (r - 1) * COL_W;
+      const xm = xFeed + (xChild - xFeed) / 2;
+      const f1y = cardCenter(`${r - 1}-${2 * k}`);
+      const hasF2 = 2 * k + 1 < rowsPer[r - 2];
+      paths.push(`M ${xFeed} ${f1y} H ${xm}`);
+      if (hasF2) {
+        const f2y = cardCenter(`${r - 1}-${2 * k + 1}`);
+        paths.push(`M ${xFeed} ${f2y} H ${xm}`);
+        paths.push(`M ${xm} ${f1y} V ${f2y}`);
+      }
+      paths.push(`M ${xm} ${cy} H ${xChild}`);
+    }
+  }
+
+  const finalMatch = byKey[`${roundsCount}-0`];
+  const selected = selectedId ? matches.find((m) => m.id === selectedId) : null;
+  function keyOfMatch(m) { return `${m.round}-${m.slot}`; }
+
+  function renderCard(r, k) {
+    const key = `${r}-${k}`;
+    const m = byKey[key];
+    const bye = isByeSlot(r, k);
+    const num = numberOf[key];
+    const p1 = m ? playerName(m.player1Id) : null;
+    const p2 = m ? playerName(m.player2Id) : null;
+    const t = m && !bye ? tally(m.id, m) : { total: 0, p1: 0, p2: 0 };
+    const live = m && m.status === "live";
+    const done = m && m.status === "done";
+    const ready = m && p1 && p2;
+    const nextKey = r < roundsCount ? `${r + 1}-${Math.floor(k / 2)}` : null;
+    const nextNum = nextKey ? numberOf[nextKey] : null;
+    const showScore = !bye && m && (done || t.total > 0);
+    const scoreColor = (isWinner) => (done ? (isWinner ? "#7bbf6a" : "#ff8a8a") : CREAM);
+    const w1 = done && m.winnerId === m.player1Id, w2 = done && m.winnerId === m.player2Id;
+
+    let footer = "";
+    if (bye) footer = "o'yinsiz o'tdi";
+    else if (live) footer = "🔴 o'ynalmoqda";
+    else if (done) footer = nextNum ? `g'olib #${nextNum} ga` : "🏆 g'olib";
+    else if (ready) footer = "boshlash uchun bosing";
+    else footer = nextNum ? `g'olib #${nextNum} ga` : "";
+
+    const row = (name, scoreText, color, isWin) => (
+      <div className="flex items-center justify-between px-2" style={{ height: CARD_H / 2 }}>
+        <span className="text-xs truncate" style={{ color: isWin ? GOLD : (name ? CREAM : "#5f7a6d"), maxWidth: CARD_W - 46 }}>{name || "x"}</span>
+        <span className="font-mono text-xs font-semibold" style={{ color }}>{scoreText}</span>
+      </div>
+    );
+
+    return (
+      <div key={key} style={{ position: "absolute", left: (r - 1) * COL_W, top: topY[key], width: CARD_W }}>
+        <div className="flex justify-between px-1" style={{ height: HEAD_H, lineHeight: `${HEAD_H}px`, fontSize: 10, color: "#8fa398" }}>
+          <span>{bye || !num ? "" : `#${num}`}</span>
+          <span>{bye ? "" : `Stol ${m && m.tableName ? m.tableName : "-"}`}</span>
+        </div>
+        <button onClick={() => { if (m && !bye) setSelectedId(m.id); }} disabled={!m || bye}
+          className="block w-full text-left"
+          style={{
+            height: CARD_H, background: m ? FELT : "transparent", borderRadius: 8, overflow: "hidden",
+            border: `1px ${m ? "solid" : "dashed"} ${live ? "#7bbf6a" : (ready && !done ? GOLD : FELT_LIGHT)}`, opacity: m ? 1 : 0.5,
+          }}>
+          {row(p1, showScore ? t.p1 : "-", scoreColor(w1), w1 || (bye && !!p1))}
+          <div style={{ height: 1, background: FELT_LIGHT }} />
+          {row(bye ? null : p2, showScore ? t.p2 : "-", scoreColor(w2), w2)}
+        </button>
+        <div style={{ height: FOOT_H, lineHeight: `${FOOT_H}px`, fontSize: 10, textAlign: "center", color: live ? "#7bbf6a" : (ready && !done ? GOLD : "#8fa398") }}>{footer}</div>
+      </div>
+    );
+  }
+
+  const cards = [];
+  for (let r = 1; r <= roundsCount; r++) for (let k = 0; k < rowsPer[r - 1]; k++) cards.push(renderCard(r, k));
+
+  // tanlangan o'yin tafsilotlari uchun
+  const selNum = selected ? numberOf[keyOfMatch(selected)] : null;
+  const selGames = selected ? (games || []).filter((g) => g.matchId === selected.id) : [];
+  const selP1 = selected ? playerName(selected.player1Id) : null;
+  const selP2 = selected ? playerName(selected.player2Id) : null;
+  const selHall = selected && selected.tableId ? halls.find((h) => h.tables.some((tb) => tb.id === selected.tableId)) : null;
+  const selTable = selHall ? selHall.tables.find((tb) => tb.id === selected.tableId) : null;
+  const selTableFree = selTable && selTable.status === "free";
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
@@ -2779,84 +2902,63 @@ function TournamentView({ tournament, players, matches, games, halls, onBack, on
         </div>
         <button onClick={() => { if (confirm("Musobaqani o'chirasizmi?")) onDelete(tournament.id); }}><Trash2 size={16} style={{ color: RED }} /></button>
       </div>
+      <p className="text-xs mb-4" style={{ color: "#8fa398" }}>{N} ishtirokchi · o'yinni bosing — tafsilot va boshlash tugmalari chiqadi</p>
       {tournament.status === "completed" && (
-        <div style={{ background: "rgba(201,162,39,0.15)", border: `1px solid ${GOLD}` }} className="rounded-xl p-3 mb-5 text-center">
-          <span className="text-sm font-semibold" style={{ color: GOLD }}>🏆 G'olib: {playerName(matches.find((m) => m.round === totalRounds)?.winnerId)}</span>
+        <div style={{ background: "rgba(201,162,39,0.15)", border: `1px solid ${GOLD}` }} className="rounded-xl p-3 mb-4 text-center">
+          <span className="text-sm font-semibold" style={{ color: GOLD }}>🏆 G'olib: {finalMatch ? playerName(finalMatch.winnerId) : "—"}</span>
         </div>
       )}
 
-      <div className="space-y-6">
-        {rounds.map((roundMatches, idx) => (
-          <div key={idx}>
-            <div className="text-xs uppercase tracking-wide mb-2" style={{ color: GOLD }}>{roundLabel(idx + 1, roundMatches.length)}</div>
-            <div className="space-y-2">
-              {roundMatches.map((m) => {
-                const p1 = playerName(m.player1Id);
-                const p2 = playerName(m.player2Id);
-                const ready = p1 && p2;
-                const isBye = !m.player2Id && m.status === "done";
-                const t = tally(m.id, m);
-                if (isBye) {
-                  return (
-                    <div key={m.id} style={{ background: FELT, border: `1px dashed ${FELT_LIGHT}`, borderRadius: 14 }} className="p-3.5 flex items-center justify-between">
-                      <span className="text-sm font-medium" style={{ color: GOLD }}>{p1}</span>
-                      <span className="text-[11px]" style={{ color: "#8fa398" }}>o'yinsiz keyingi bosqichga o'tdi</span>
-                    </div>
-                  );
-                }
-                return (
-                  <div key={m.id} style={{ background: FELT, border: `1px solid ${m.status === "live" ? "#7bbf6a" : FELT_LIGHT}`, borderRadius: 14 }} className="p-3.5">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-medium" style={{ color: m.winnerId === m.player1Id ? GOLD : CREAM }}>{p1 || "?"}</span>
-                      <div className="flex items-center gap-2">
-                        {t.total > 0 && <span className="font-mono text-sm font-semibold" style={{ color: CREAM }}>{t.p1}</span>}
-                        {m.winnerId === m.player1Id && <Trophy size={13} style={{ color: GOLD }} />}
-                      </div>
-                    </div>
-                    <div className="text-[10px] text-center opacity-50 mb-1" style={{ color: CREAM }}>vs</div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium" style={{ color: m.winnerId === m.player2Id ? GOLD : CREAM }}>{p2 || "?"}</span>
-                      <div className="flex items-center gap-2">
-                        {t.total > 0 && <span className="font-mono text-sm font-semibold" style={{ color: CREAM }}>{t.p2}</span>}
-                        {m.winnerId === m.player2Id && <Trophy size={13} style={{ color: GOLD }} />}
-                      </div>
-                    </div>
-                    {t.total > 0 && (
-                      <div className="text-[10px] text-center mb-2" style={{ color: "#8fa398" }}>
-                        {(games || []).filter((g) => g.matchId === m.id).map((g) => `${g.p1Score}:${g.p2Score}`).join(" · ")}
-                      </div>
-                    )}
-                    {m.status === "pending" && ready && (
-                      <button onClick={() => setPickTableFor(m.id)} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2 rounded-lg text-xs font-semibold">
-                        Boshlash
-                      </button>
-                    )}
-                    {m.status === "live" && (() => {
-                      const hall = halls.find((h) => h.tables.some((tb) => tb.id === m.tableId));
-                      const tbl = hall ? hall.tables.find((tb) => tb.id === m.tableId) : null;
-                      const tableFree = tbl && tbl.status === "free";
-                      return tableFree ? (
-                        <button onClick={() => onEnterResult(m.id)}
-                          className="w-full py-2 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>
-                          Natijani kiritish
-                        </button>
-                      ) : (
-                        <button onClick={() => onGoToTable(findHallIdForTable(m.tableId))}
-                          className="w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5" style={{ background: "rgba(123,191,106,0.18)", color: "#7bbf6a" }}>
-                          🔴 O'ynalmoqda — {m.hallName} · {m.tableName}
-                        </button>
-                      );
-                    })()}
-                    {m.status === "done" && (
-                      <div className="text-[11px] text-center" style={{ color: "#8fa398" }}>Yakunlandi</div>
-                    )}
-                  </div>
-                );
-              })}
+      <div style={{ overflowX: "auto", paddingBottom: 12 }}>
+        <div style={{ position: "relative", width: totalW, height: totalH }}>
+          {Array.from({ length: roundsCount }, (_, i) => (
+            <div key={`h-${i}`} style={{ position: "absolute", left: i * COL_W, top: 0, width: CARD_W, textAlign: "center", fontSize: 11, fontWeight: 600, letterSpacing: 0.5, color: GOLD, textTransform: "uppercase" }}>
+              {roundLabel(i + 1)}
             </div>
-          </div>
-        ))}
+          ))}
+          <svg width={totalW} height={totalH} style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}>
+            {paths.map((d, i) => <path key={i} d={d} stroke="#2f7a5c" strokeWidth="1.5" fill="none" />)}
+          </svg>
+          {cards}
+        </div>
       </div>
+
+      {selected && (
+        <Modal onClose={() => setSelectedId(null)}>
+          <h2 className="font-display text-lg font-semibold mb-1" style={{ color: CREAM }}>{selNum ? `#${selNum} · ` : ""}{roundLabel(selected.round)}</h2>
+          <p className="text-xs mb-4" style={{ color: "#8fa398" }}>{selected.status === "done" ? "Yakunlangan" : selected.status === "live" ? "O'ynalmoqda" : "Boshlanmagan"}</p>
+          <div style={{ background: FELT_DARK, borderRadius: 12 }} className="p-3 mb-3 space-y-1.5">
+            <div className="flex justify-between text-sm"><span style={{ color: selected.winnerId && selected.winnerId === selected.player1Id ? GOLD : CREAM }}>{selP1 || "—"}</span><span className="font-mono" style={{ color: CREAM }}>{selGames.filter((g) => g.winnerId === selected.player1Id).length}</span></div>
+            <div className="flex justify-between text-sm"><span style={{ color: selected.winnerId && selected.winnerId === selected.player2Id ? GOLD : CREAM }}>{selP2 || "—"}</span><span className="font-mono" style={{ color: CREAM }}>{selGames.filter((g) => g.winnerId === selected.player2Id).length}</span></div>
+          </div>
+          {selGames.length > 0 && (
+            <div className="mb-4">
+              <div className="text-[11px] mb-1.5" style={{ color: "#8fa398" }}>Partiyalar</div>
+              <div className="space-y-1">
+                {selGames.map((g) => (
+                  <div key={g.id} className="flex justify-between text-xs px-1" style={{ color: CREAM }}>
+                    <span>{g.gameNumber}-partiya</span><span className="font-mono">{g.p1Score} : {g.p2Score}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {selected.status === "pending" && selP1 && selP2 && (
+            <button onClick={() => { setSelectedId(null); setPickTableFor(selected.id); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl text-sm font-semibold">Boshlash</button>
+          )}
+          {selected.status === "pending" && !(selP1 && selP2) && (
+            <p className="text-xs text-center" style={{ color: "#8fa398" }}>Oldingi o'yinlar tugashini kuting</p>
+          )}
+          {selected.status === "live" && (selTableFree ? (
+            <button onClick={() => { setSelectedId(null); onEnterResult(selected.id); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl text-sm font-semibold">Natijani kiritish</button>
+          ) : (
+            <button onClick={() => { setSelectedId(null); onGoToTable(findHallIdForTable(selected.tableId)); }}
+              className="w-full py-3 rounded-xl text-sm font-semibold" style={{ background: "rgba(123,191,106,0.18)", color: "#7bbf6a" }}>
+              🔴 {selected.hallName} · {selected.tableName} stoliga o'tish
+            </button>
+          ))}
+        </Modal>
+      )}
 
       {pickTableFor && (
         <Modal onClose={() => setPickTableFor(null)}>
