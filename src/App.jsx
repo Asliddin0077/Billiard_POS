@@ -3,7 +3,7 @@ import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
   Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
-  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight, Boxes, Wallet, Minus, TrendingUp, Trophy
+  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight, Boxes, Wallet, Minus, TrendingUp
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.3.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.3.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -133,7 +133,6 @@ function mapHistory(row) {
     generalNote: row.general_note || "",
     actorName: row.actor_name || "", paymentMethod: row.payment_method || "",
     openedByName: row.opened_by_name || "",
-    tournamentName: row.tournament_name || "",
   };
 }
 function mapPromo(row) { return { code: row.code, durationDays: row.duration_days || 30, used: row.used, usedBy: row.used_by }; }
@@ -170,19 +169,6 @@ function mapSalaryPayment(row) {
 function mapShift(row) {
   return { id: row.id, openedBy: row.opened_by, openedByName: row.opened_by_name, openedAt: new Date(row.opened_at).getTime(),
     closedBy: row.closed_by, closedByName: row.closed_by_name, closedAt: row.closed_at ? new Date(row.closed_at).getTime() : null, status: row.status };
-}
-function mapTournament(row) {
-  return { id: row.id, name: row.name, playerCount: row.player_count, status: row.status,
-    createdAt: new Date(row.created_at).getTime(), completedAt: row.completed_at ? new Date(row.completed_at).getTime() : null };
-}
-function mapTPlayer(row) { return { id: row.id, tournamentId: row.tournament_id, name: row.name, seed: row.seed }; }
-function mapTGame(row) {
-  return { id: row.id, matchId: row.match_id, gameNumber: row.game_number, p1Score: Number(row.player1_score), p2Score: Number(row.player2_score), winnerId: row.winner_id };
-}
-function mapTMatch(row) {
-  return { id: row.id, tournamentId: row.tournament_id, round: row.round, slot: row.slot,
-    player1Id: row.player1_id, player2Id: row.player2_id, winnerId: row.winner_id,
-    tableId: row.table_id, hallName: row.hall_name || "", tableName: row.table_name || "", status: row.status };
 }
 
 // ---------------- data fetch helpers ----------------
@@ -305,14 +291,6 @@ export default function BilliardPOS() {
   const [staffSalaries, setStaffSalaries] = useState([]);
   const [salaryPayments, setSalaryPayments] = useState([]);
   const [shifts, setShifts] = useState([]);
-  const [tournaments, setTournaments] = useState([]);
-  const [activeTournamentId, setActiveTournamentId] = useState(null);
-  const [tPlayers, setTPlayers] = useState([]);
-  const [tMatches, setTMatches] = useState([]);
-  const [tGames, setTGames] = useState([]);
-  const [p1ScoreInput, setP1ScoreInput] = useState("");
-  const [p2ScoreInput, setP2ScoreInput] = useState("");
-  const [pendingMatchResult, setPendingMatchResult] = useState(null);
   const [history, setHistory] = useState([]);
   const [myChat, setMyChat] = useState([]);
 
@@ -797,13 +775,6 @@ export default function BilliardPOS() {
         return;
       }
 
-      // Shu stolda jonli turnir o'yini bormi — tekshiramiz (xatolik bo'lsa ham davom etadi)
-      let liveMatch = null;
-      try {
-        const { data } = await supabase.from("tournament_matches").select("*, tournaments(name)").eq("table_id", tableId).eq("status", "live").maybeSingle();
-        liveMatch = data || null;
-      } catch (e) {}
-
       const rate = table.rate;
       const existingLaps = table.laps;
       const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
@@ -822,8 +793,6 @@ export default function BilliardPOS() {
         laps: allLaps, general_note: table.note || null,
         actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
         opened_by_name: table.startedByName || "",
-        tournament_id: liveMatch ? liveMatch.tournament_id : null,
-        tournament_name: liveMatch && liveMatch.tournaments ? liveMatch.tournaments.name : null,
       });
       if (histRes.error) {
         showToast(`❌ STOL BO'SHADI, LEKIN HISOBOTGA YOZILMADI: ${histRes.error.message} — DARHOL XABAR BERING, summa: ${fmtMoney(record.total)}`);
@@ -833,16 +802,6 @@ export default function BilliardPOS() {
       await supabase.from("table_extras").delete().eq("table_id", tableId);
       await supabase.from("table_laps").delete().eq("table_id", tableId);
       await refreshOwnerData();
-      if (liveMatch) {
-        const [p1Res, p2Res] = await Promise.all([
-          liveMatch.player1_id ? supabase.from("tournament_players").select("*").eq("id", liveMatch.player1_id).single() : { data: null },
-          liveMatch.player2_id ? supabase.from("tournament_players").select("*").eq("id", liveMatch.player2_id).single() : { data: null },
-        ]);
-        setPendingMatchResult({
-          matchId: liveMatch.id, tournamentId: liveMatch.tournament_id, tournamentName: liveMatch.tournaments ? liveMatch.tournaments.name : "",
-          player1: p1Res.data ? mapTPlayer(p1Res.data) : null, player2: p2Res.data ? mapTPlayer(p2Res.data) : null,
-        });
-      }
     } catch (e) {
       showToast(`❌ Kutilmagan xatolik: ${e && e.message ? e.message : e}`);
     }
@@ -1024,151 +983,6 @@ export default function BilliardPOS() {
     showToast(`✅ Smena yopildi`);
     await refreshOwnerData();
   }
-  // ---- musobaqa ----
-  function findHallIdForTable(tableId) {
-    for (const h of halls) { if (h.tables.some((t) => t.id === tableId)) return h.id; }
-    return null;
-  }
-  async function fetchTournamentsList() {
-    const { data } = await supabase.from("tournaments").select("*").eq("owner_id", ownerIdOf(currentUser)).order("created_at", { ascending: false });
-    setTournaments((data || []).map(mapTournament));
-  }
-  async function fetchTournamentDetail(tournamentId) {
-    const [pRes, mRes] = await Promise.all([
-      supabase.from("tournament_players").select("*").eq("tournament_id", tournamentId).order("seed"),
-      supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).order("round").order("slot"),
-    ]);
-    if (pRes.error || mRes.error) { showToast(`❌ Musobaqani yuklashda xatolik: ${(pRes.error || mRes.error).message}`); }
-    const playerList = (pRes.data || []).map(mapTPlayer);
-    setTPlayers(playerList);
-    let matchList = (mRes.data || []).map(mapTMatch);
-    // Avvalgi xato tufayli juftliklar yozilmay qolgan turnirni avtomatik tiklaymiz
-    if (matchList.length === 0 && playerList.length >= 2 && !mRes.error) {
-      const t = tournaments.find((x) => x.id === tournamentId);
-      if (!t || t.status === "active") {
-        const ok = await generateRoundMatches(tournamentId, 1, playerList.map((p) => p.id));
-        if (ok) {
-          const again = await supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).order("round").order("slot");
-          matchList = (again.data || []).map(mapTMatch);
-        }
-      }
-    }
-    setTMatches(matchList);
-    const matchIds = matchList.map((m) => m.id);
-    const gRes = matchIds.length > 0 ? await supabase.from("tournament_match_games").select("*").in("match_id", matchIds).order("game_number") : { data: [] };
-    setTGames((gRes.data || []).map(mapTGame));
-  }
-  async function generateRoundMatches(tournamentId, round, participantIds) {
-    if (participantIds.length <= 1) {
-      await supabase.from("tournaments").update({ status: "completed", completed_at: new Date().toISOString() }).eq("id", tournamentId);
-      showToast(`🏆 Turnir tugadi!`);
-      return;
-    }
-    // Barcha qatorlarda bir xil ustunlar bo'lishi shart (aks holda ommaviy yozish buziladi)
-    const rows = [];
-    let slot = 0;
-    for (let i = 0; i < participantIds.length; i += 2) {
-      if (i + 1 < participantIds.length) {
-        rows.push({ tournament_id: tournamentId, round, slot, player1_id: participantIds[i], player2_id: participantIds[i + 1], winner_id: null, status: "pending" });
-      } else {
-        // toq qolgan ishtirokchi — o'yinsiz keyingi bosqichga o'tadi
-        rows.push({ tournament_id: tournamentId, round, slot, player1_id: participantIds[i], player2_id: null, winner_id: participantIds[i], status: "done" });
-      }
-      slot++;
-    }
-    const res = await supabase.from("tournament_matches").insert(rows);
-    if (res.error) { showToast(`❌ Juftliklar yozilmadi: ${res.error.message}`); return false; }
-    return true;
-  }
-  async function checkRoundCompleteAndAdvance(tournamentId, round) {
-    const { data: roundMatches } = await supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).eq("round", round);
-    if (!roundMatches || roundMatches.length === 0) return;
-    if (!roundMatches.every((m) => m.status === "done")) return;
-    const { data: nextExisting } = await supabase.from("tournament_matches").select("id").eq("tournament_id", tournamentId).eq("round", round + 1).limit(1);
-    if (nextExisting && nextExisting.length > 0) return;
-    const winners = [...roundMatches].sort((a, b) => a.slot - b.slot).map((m) => m.winner_id);
-    await generateRoundMatches(tournamentId, round + 1, winners);
-  }
-  async function createTournament(name, playerNamesRaw) {
-    const names = playerNamesRaw.map((n) => n.trim()).filter(Boolean);
-    const N = names.length;
-    if (N < 2) { showToast("❌ Kamida 2 ishtirokchi kerak"); return; }
-    const shuffled = [...names];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    const { data: tData, error: tErr } = await supabase.from("tournaments").insert({
-      owner_id: currentUser.id, name: name.trim() || `Turnir ${fmtDate(Date.now())}`, player_count: N,
-    }).select().single();
-    if (tErr) { showToast(`❌ Xatolik: ${tErr.message}`); return; }
-    const tournamentId = tData.id;
-    const playerRows = shuffled.map((nm, idx) => ({ tournament_id: tournamentId, name: nm, seed: idx + 1 }));
-    const { data: pData, error: pErr } = await supabase.from("tournament_players").insert(playerRows).select();
-    if (pErr) { showToast(`❌ Xatolik: ${pErr.message}`); return; }
-    const sortedIds = [...pData].sort((a, b) => a.seed - b.seed).map((p) => p.id);
-    await generateRoundMatches(tournamentId, 1, sortedIds);
-    showToast(`✅ Turnir yaratildi — ${N} ishtirokchi`);
-    await fetchTournamentsList();
-    setActiveTournamentId(tournamentId);
-    await fetchTournamentDetail(tournamentId);
-    setScreen("tournament");
-  }
-  async function deleteTournament(tournamentId) {
-    await supabase.from("tournaments").delete().eq("id", tournamentId);
-    await fetchTournamentsList();
-    setScreen("tournaments");
-  }
-  async function startTournamentMatch(matchId, hallId, tableId) {
-    const hall = halls.find((h) => h.id === hallId);
-    const table = hall && hall.tables.find((t) => t.id === tableId);
-    if (!table || table.status !== "free") { showToast("❌ Bu stol band"); return; }
-    await startTable(hallId, tableId, null, null);
-    const r = await supabase.from("tournament_matches").update({
-      table_id: tableId, hall_name: hall.name, table_name: table.name, status: "live",
-    }).eq("id", matchId);
-    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
-    await fetchTournamentDetail(activeTournamentId);
-  }
-  function openResultEntry(matchId) {
-    const m = tMatches.find((x) => x.id === matchId);
-    if (!m) return;
-    const t = tournaments.find((x) => x.id === m.tournamentId);
-    setP1ScoreInput(""); setP2ScoreInput("");
-    setPendingMatchResult({
-      matchId, tournamentId: m.tournamentId, tournamentName: t ? t.name : "",
-      player1: tPlayers.find((p) => p.id === m.player1Id) || null, player2: tPlayers.find((p) => p.id === m.player2Id) || null,
-    });
-  }
-  async function recordPartiyaResult(matchId, p1ScoreRaw, p2ScoreRaw, isFinal) {
-    const match = tMatches.find((m) => m.id === matchId);
-    if (!match) return;
-    const p1Score = Number(p1ScoreRaw) || 0, p2Score = Number(p2ScoreRaw) || 0;
-    const gameWinnerId = p1Score >= p2Score ? match.player1Id : match.player2Id;
-    const existingGames = tGames.filter((g) => g.matchId === matchId);
-    const gameNumber = existingGames.length + 1;
-    const r = await supabase.from("tournament_match_games").insert({
-      match_id: matchId, game_number: gameNumber, player1_score: p1Score, player2_score: p2Score, winner_id: gameWinnerId,
-    });
-    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
-
-    if (!isFinal) {
-      const hallId = findHallIdForTable(match.tableId);
-      if (hallId) await startTable(hallId, match.tableId, null, null);
-      showToast(`✅ ${gameNumber}-partiya yozildi — keyingisi boshlandi`);
-      await fetchTournamentDetail(match.tournamentId);
-      return;
-    }
-
-    const allWins = [...existingGames.map((g) => g.winnerId), gameWinnerId];
-    const p1Wins = allWins.filter((id) => id === match.player1Id).length;
-    const p2Wins = allWins.filter((id) => id === match.player2Id).length;
-    const matchWinnerId = p1Wins >= p2Wins ? match.player1Id : match.player2Id;
-    await supabase.from("tournament_matches").update({ status: "done", winner_id: matchWinnerId }).eq("id", matchId);
-    await checkRoundCompleteAndAdvance(match.tournamentId, match.round);
-    await fetchTournamentDetail(match.tournamentId);
-    await fetchTournamentsList();
-  }
   async function changeAdminPassword(oldPass, newPass) {
     if (newPass.length < 8) { showToast("Yangi parol kamida 8 belgi bo'lishi kerak"); return; }
     const { data, error } = await supabase.rpc("change_admin_password", { p_login: adminLogin, p_old_password: oldPass, p_new_password: newPass });
@@ -1234,35 +1048,6 @@ export default function BilliardPOS() {
         </div>
       )}
 
-      {pendingMatchResult && (
-        <Modal onClose={null}>
-          <h2 className="font-display text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: CREAM }}>🏆 {pendingMatchResult.tournamentName}</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Partiya natijasi — har birining hisobini kiriting</p>
-          <div className="mb-3">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>{pendingMatchResult.player1 ? pendingMatchResult.player1.name : "1-o'yinchi"}:</label>
-            <input type="number" value={p1ScoreInput} onChange={(e) => setP1ScoreInput(e.target.value)} placeholder="0"
-              className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-          </div>
-          <div className="mb-4">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>{pendingMatchResult.player2 ? pendingMatchResult.player2.name : "2-o'yinchi"}:</label>
-            <input type="number" value={p2ScoreInput} onChange={(e) => setP2ScoreInput(e.target.value)} placeholder="0"
-              className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-          </div>
-          <div className="flex gap-2">
-            <button disabled={p1ScoreInput === "" || p2ScoreInput === ""}
-              onClick={async () => { await recordPartiyaResult(pendingMatchResult.matchId, p1ScoreInput, p2ScoreInput, false); setPendingMatchResult(null); setP1ScoreInput(""); setP2ScoreInput(""); }}
-              className="flex-1 py-3 rounded-xl text-sm font-semibold disabled:opacity-40" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
-              Keyingi partiya
-            </button>
-            <button disabled={p1ScoreInput === "" || p2ScoreInput === ""}
-              onClick={async () => { await recordPartiyaResult(pendingMatchResult.matchId, p1ScoreInput, p2ScoreInput, true); setPendingMatchResult(null); setP1ScoreInput(""); setP2ScoreInput(""); }}
-              className="flex-1 py-3 rounded-xl text-sm font-semibold disabled:opacity-40" style={{ background: GOLD, color: FELT_DARK }}>
-              O'yin tugadi
-            </button>
-          </div>
-        </Modal>
-      )}
-
       {installPrompt && (
         <button
           onClick={async () => { installPrompt.prompt(); await installPrompt.userChoice; setInstallPrompt(null); }}
@@ -1286,7 +1071,6 @@ export default function BilliardPOS() {
           onLogout={handleLogout} onStats={() => setScreen("stats")}
           onWarehouse={() => setScreen("warehouse")} onDebts={() => setScreen("debts")}
           onFinance={() => setScreen("finance")} onStaff={() => setScreen("staff")}
-          onTournaments={async () => { await fetchTournamentsList(); setScreen("tournaments"); }}
           shifts={shifts} onOpenShift={openShift} onCloseShift={closeShift}
           history={history} warehouseLogs={warehouseLogs}
           staffList={staffList} staffSalaries={staffSalaries} salaryPayments={salaryPayments} onMarkSalaryPaid={markSalaryPaid}
@@ -1323,25 +1107,6 @@ export default function BilliardPOS() {
           onBack={() => setScreen("halls")}
           onCreateStaff={createStaffAccount} onDeleteStaff={deleteStaffAccount} onSetSalary={setStaffSalary} onMarkSalaryPaid={markSalaryPaid}
           onToast={showToast}
-        />
-      )}
-
-      {screen === "tournaments" && currentUser && (
-        <TournamentsScreen
-          tournaments={tournaments} onBack={() => setScreen("halls")}
-          onOpen={async (id) => { setActiveTournamentId(id); await fetchTournamentDetail(id); setScreen("tournament"); }}
-          onCreate={createTournament} onToast={showToast}
-        />
-      )}
-
-      {screen === "tournament" && currentUser && (
-        <TournamentView
-          tournament={tournaments.find((t) => t.id === activeTournamentId)}
-          players={tPlayers} matches={tMatches} games={tGames} halls={halls}
-          onBack={() => setScreen("tournaments")}
-          onStartMatch={startTournamentMatch} onEnterResult={openResultEntry}
-          onGoToTable={(hallId) => { setActiveHallId(hallId); setScreen("hall"); }}
-          onDelete={deleteTournament} onToast={showToast}
         />
       )}
 
@@ -1583,7 +1348,7 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onFinance, onStaff, onTournaments, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword }) {
+function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword }) {
   const [tab, setTab] = useState("halls");
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -1693,7 +1458,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
       })()}
 
       {user.role === "owner" && (
-        <div className="grid grid-cols-2 gap-3 mb-3">
+        <div className="grid grid-cols-2 gap-3 mb-4">
           <button onClick={onFinance} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
             <TrendingUp size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Moliya</span>
           </button>
@@ -1701,12 +1466,6 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
             <Users size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Xodimlar</span>
           </button>
         </div>
-      )}
-
-      {user.role === "owner" && (
-        <button onClick={onTournaments} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="w-full mb-4 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
-          <Trophy size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Musobaqa</span>
-        </button>
       )}
 
       {user.betaAccess && (
@@ -2656,341 +2415,6 @@ function StaffScreen({ staffList, staffSalaries, salaryPayments, history, onBack
   );
 }
 
-// ---------------- MUSOBAQA RO'YXATI ----------------
-function TournamentsScreen({ tournaments, onBack, onOpen, onCreate, onToast }) {
-  const [showCreate, setShowCreate] = useState(false);
-  const [name, setName] = useState("");
-  const [namesText, setNamesText] = useState("");
-  const names = namesText.split("\n").map((n) => n.trim()).filter(Boolean);
-  const N = names.length;
-  const isPow2 = N >= 2; // istalgan son (2 dan ko'p) — toq bo'lsa bittasi o'yinsiz keyingi bosqichga o'tadi
-
-  const active = tournaments.filter((t) => t.status === "active");
-  const completed = tournaments.filter((t) => t.status === "completed");
-
-  return (
-    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
-        <h1 className="font-display text-lg font-semibold flex items-center gap-2" style={{ color: CREAM }}><Trophy size={18} style={{ color: GOLD }} /> Musobaqa</h1>
-      </div>
-
-      <button onClick={() => { setShowCreate(true); setName(""); setNamesText(""); }}
-        style={{ background: GOLD, color: FELT_DARK }} className="w-full mb-5 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
-        <Plus size={16} /> Yangi musobaqa
-      </button>
-
-      {active.length > 0 && (
-        <>
-          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Davom etmoqda</div>
-          <div className="space-y-2 mb-5">
-            {active.map((t) => (
-              <button key={t.id} onClick={() => onOpen(t.id)} style={{ background: FELT, border: `1px solid ${GOLD}`, borderRadius: 16 }} className="w-full p-4 text-left flex justify-between items-center">
-                <div>
-                  <div className="text-sm font-medium" style={{ color: CREAM }}>{t.name}</div>
-                  <div className="text-xs" style={{ color: "#8fa398" }}>{t.playerCount} ishtirokchi · {fmtDate(t.createdAt)}</div>
-                </div>
-                <span className="text-xs px-2 py-1 rounded-full" style={{ background: "rgba(123,191,106,0.18)", color: "#7bbf6a" }}>🟢 Faol</span>
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
-      {completed.length > 0 && (
-        <>
-          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Tugagan</div>
-          <div className="space-y-2">
-            {completed.map((t) => (
-              <button key={t.id} onClick={() => onOpen(t.id)} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16, opacity: 0.8 }} className="w-full p-4 text-left flex justify-between items-center">
-                <div>
-                  <div className="text-sm font-medium" style={{ color: CREAM }}>{t.name}</div>
-                  <div className="text-xs" style={{ color: "#8fa398" }}>{t.playerCount} ishtirokchi · {fmtDate(t.createdAt)}</div>
-                </div>
-                <Trophy size={16} style={{ color: GOLD }} />
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
-      {tournaments.length === 0 && <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha musobaqa yo'q</p>}
-
-      {showCreate && (
-        <Modal onClose={() => setShowCreate(false)}>
-          <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Yangi musobaqa</h2>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nomi (ixtiyoriy)"
-            className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-          <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Ishtirokchilar (har biri yangi qatorda)</label>
-          <textarea value={namesText} onChange={(e) => setNamesText(e.target.value)} rows={8} placeholder={"Aziz\nBobur\nDavron\nElyor\n..."}
-            className="w-full mb-2 px-4 py-3 rounded-xl outline-none text-sm resize-none" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-          <p className="text-xs mb-4" style={{ color: isPow2 ? "#7bbf6a" : N > 0 ? "#ff8a8a" : "#8fa398" }}>
-            {N} kishi {N === 1 ? "— kamida 2 kishi kerak" : N > 1 ? `— ${Math.floor(N / 2)} ta juftlik${N % 2 === 1 ? ", 1 kishi o'yinsiz o'tadi" : ""}` : ""}
-          </p>
-          <button disabled={!isPow2}
-            onClick={() => { onCreate(name, names); setShowCreate(false); }}
-            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
-            Qura tashlash va boshlash
-          </button>
-        </Modal>
-      )}
-    </div>
-  );
-}
-
-// ---------------- MUSOBAQA SETKASI ----------------
-function TournamentView({ tournament, players, matches, games, halls, onBack, onStartMatch, onEnterResult, onGoToTable, onDelete, onToast }) {
-  const [pickTableFor, setPickTableFor] = useState(null); // matchId
-  const [selectedId, setSelectedId] = useState(null);
-  if (!tournament) return (
-    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
-      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
-      <p className="text-sm" style={{ color: "#b8c9bf" }}>Yuklanmoqda...</p>
-    </div>
-  );
-
-  // ---- o'lchamlar ----
-  const CARD_W = 200, COL_W = 250, CARD_H = 56, HEAD_H = 18, FOOT_H = 18;
-  const BLOCK_H = HEAD_H + CARD_H + FOOT_H, ROW_H = BLOCK_H + 14, TOP_PAD = 34;
-
-  function playerName(id) { const p = players.find((x) => x.id === id); return p ? p.name : null; }
-  function findHallIdForTable(tableId) {
-    for (const h of halls) { if (h.tables.some((t) => t.id === tableId)) return h.id; }
-    return null;
-  }
-  function tally(matchId, m) {
-    const gs = (games || []).filter((g) => g.matchId === matchId);
-    return { total: gs.length, p1: gs.filter((g) => g.winnerId === m.player1Id).length, p2: gs.filter((g) => g.winnerId === m.player2Id).length };
-  }
-
-  // ---- setka tuzilmasi (hali yaratilmagan bosqichlar ham oldindan chiziladi) ----
-  const N = tournament.playerCount;
-  const r1Existing = matches.filter((m) => m.round === 1).length;
-  const R1 = r1Existing > 0 ? r1Existing : Math.ceil(N / 2);
-  const rowsPer = [R1];
-  while (rowsPer[rowsPer.length - 1] > 1) rowsPer.push(Math.ceil(rowsPer[rowsPer.length - 1] / 2));
-  const roundsCount = rowsPer.length;
-  const byKey = {};
-  matches.forEach((m) => { byKey[`${m.round}-${m.slot}`] = m; });
-
-  function isByeSlot(r, k) {
-    if (r === 1) return N % 2 === 1 && k === R1 - 1;
-    return rowsPer[r - 2] % 2 === 1 && k === rowsPer[r - 1] - 1;
-  }
-  function roundLabel(r) {
-    const c = rowsPer[r - 1];
-    if (c === 1) return "🏆 Final";
-    if (c === 2) return "Yarim final";
-    if (c <= 4) return "Chorak final";
-    return `${r}-bosqich`;
-  }
-
-  // o'yin raqamlari (o'yinsiz o'tuvchilarga raqam berilmaydi)
-  const numberOf = {};
-  let counter = 0;
-  for (let r = 1; r <= roundsCount; r++) for (let k = 0; k < rowsPer[r - 1]; k++) { if (!isByeSlot(r, k)) numberOf[`${r}-${k}`] = ++counter; }
-
-  // vertikal joylashuv: keyingi bosqich o'yini ikki oldingi o'yin o'rtasida turadi
-  const topY = {};
-  for (let k = 0; k < rowsPer[0]; k++) topY[`1-${k}`] = TOP_PAD + k * ROW_H;
-  for (let r = 2; r <= roundsCount; r++) {
-    for (let k = 0; k < rowsPer[r - 1]; k++) {
-      const f1 = topY[`${r - 1}-${2 * k}`];
-      const hasF2 = 2 * k + 1 < rowsPer[r - 2];
-      const f2 = hasF2 ? topY[`${r - 1}-${2 * k + 1}`] : f1;
-      topY[`${r}-${k}`] = (f1 + f2) / 2;
-    }
-  }
-  const cardCenter = (key) => topY[key] + HEAD_H + CARD_H / 2;
-  const totalH = TOP_PAD + rowsPer[0] * ROW_H;
-  const totalW = (roundsCount - 1) * COL_W + CARD_W + 4;
-
-  // bog'lovchi chiziqlar
-  const paths = [];
-  for (let r = 2; r <= roundsCount; r++) {
-    for (let k = 0; k < rowsPer[r - 1]; k++) {
-      const cy = cardCenter(`${r}-${k}`);
-      const xFeed = (r - 2) * COL_W + CARD_W;
-      const xChild = (r - 1) * COL_W;
-      const xm = xFeed + (xChild - xFeed) / 2;
-      const f1y = cardCenter(`${r - 1}-${2 * k}`);
-      const hasF2 = 2 * k + 1 < rowsPer[r - 2];
-      paths.push(`M ${xFeed} ${f1y} H ${xm}`);
-      if (hasF2) {
-        const f2y = cardCenter(`${r - 1}-${2 * k + 1}`);
-        paths.push(`M ${xFeed} ${f2y} H ${xm}`);
-        paths.push(`M ${xm} ${f1y} V ${f2y}`);
-      }
-      paths.push(`M ${xm} ${cy} H ${xChild}`);
-    }
-  }
-
-  const finalMatch = byKey[`${roundsCount}-0`];
-  const selected = selectedId ? matches.find((m) => m.id === selectedId) : null;
-  function keyOfMatch(m) { return `${m.round}-${m.slot}`; }
-
-  function renderCard(r, k) {
-    const key = `${r}-${k}`;
-    const m = byKey[key];
-    const bye = isByeSlot(r, k);
-    const num = numberOf[key];
-    const p1 = m ? playerName(m.player1Id) : null;
-    const p2 = m ? playerName(m.player2Id) : null;
-    const t = m && !bye ? tally(m.id, m) : { total: 0, p1: 0, p2: 0 };
-    const live = m && m.status === "live";
-    const done = m && m.status === "done";
-    const ready = m && p1 && p2;
-    const nextKey = r < roundsCount ? `${r + 1}-${Math.floor(k / 2)}` : null;
-    const nextNum = nextKey ? numberOf[nextKey] : null;
-    const showScore = !bye && m && (done || t.total > 0);
-    const scoreColor = (isWinner) => (done ? (isWinner ? "#7bbf6a" : "#ff8a8a") : CREAM);
-    const w1 = done && m.winnerId === m.player1Id, w2 = done && m.winnerId === m.player2Id;
-
-    let footer = "";
-    if (bye) footer = "o'yinsiz o'tdi";
-    else if (live) footer = "🔴 o'ynalmoqda";
-    else if (done) footer = nextNum ? `g'olib #${nextNum} ga` : "🏆 g'olib";
-    else if (ready) footer = "boshlash uchun bosing";
-    else footer = nextNum ? `g'olib #${nextNum} ga` : "";
-
-    const row = (name, scoreText, color, isWin) => (
-      <div className="flex items-center justify-between px-2" style={{ height: CARD_H / 2 }}>
-        <span className="text-xs truncate" style={{ color: isWin ? GOLD : (name ? CREAM : "#5f7a6d"), maxWidth: CARD_W - 46 }}>{name || "x"}</span>
-        <span className="font-mono text-xs font-semibold" style={{ color }}>{scoreText}</span>
-      </div>
-    );
-
-    return (
-      <div key={key} style={{ position: "absolute", left: (r - 1) * COL_W, top: topY[key], width: CARD_W }}>
-        <div className="flex justify-between px-1" style={{ height: HEAD_H, lineHeight: `${HEAD_H}px`, fontSize: 10, color: "#8fa398" }}>
-          <span>{bye || !num ? "" : `#${num}`}</span>
-          <span>{bye ? "" : `Stol ${m && m.tableName ? m.tableName : "-"}`}</span>
-        </div>
-        <button onClick={() => { if (m && !bye) setSelectedId(m.id); }} disabled={!m || bye}
-          className="block w-full text-left"
-          style={{
-            height: CARD_H, background: m ? FELT : "transparent", borderRadius: 8, overflow: "hidden",
-            border: `1px ${m ? "solid" : "dashed"} ${live ? "#7bbf6a" : (ready && !done ? GOLD : FELT_LIGHT)}`, opacity: m ? 1 : 0.5,
-          }}>
-          {row(p1, showScore ? t.p1 : "-", scoreColor(w1), w1 || (bye && !!p1))}
-          <div style={{ height: 1, background: FELT_LIGHT }} />
-          {row(bye ? null : p2, showScore ? t.p2 : "-", scoreColor(w2), w2)}
-        </button>
-        <div style={{ height: FOOT_H, lineHeight: `${FOOT_H}px`, fontSize: 10, textAlign: "center", color: live ? "#7bbf6a" : (ready && !done ? GOLD : "#8fa398") }}>{footer}</div>
-      </div>
-    );
-  }
-
-  const cards = [];
-  for (let r = 1; r <= roundsCount; r++) for (let k = 0; k < rowsPer[r - 1]; k++) cards.push(renderCard(r, k));
-
-  // tanlangan o'yin tafsilotlari uchun
-  const selNum = selected ? numberOf[keyOfMatch(selected)] : null;
-  const selGames = selected ? (games || []).filter((g) => g.matchId === selected.id) : [];
-  const selP1 = selected ? playerName(selected.player1Id) : null;
-  const selP2 = selected ? playerName(selected.player2Id) : null;
-  const selHall = selected && selected.tableId ? halls.find((h) => h.tables.some((tb) => tb.id === selected.tableId)) : null;
-  const selTable = selHall ? selHall.tables.find((tb) => tb.id === selected.tableId) : null;
-  const selTableFree = selTable && selTable.status === "free";
-
-  return (
-    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-3">
-          <button onClick={onBack}><ArrowLeft size={20} style={{ color: CREAM }} /></button>
-          <h1 className="font-display text-lg font-semibold" style={{ color: CREAM }}>{tournament.name}</h1>
-        </div>
-        <button onClick={() => { if (confirm("Musobaqani o'chirasizmi?")) onDelete(tournament.id); }}><Trash2 size={16} style={{ color: RED }} /></button>
-      </div>
-      <p className="text-xs mb-4" style={{ color: "#8fa398" }}>{N} ishtirokchi · o'yinni bosing — tafsilot va boshlash tugmalari chiqadi</p>
-      {tournament.status === "completed" && (
-        <div style={{ background: "rgba(201,162,39,0.15)", border: `1px solid ${GOLD}` }} className="rounded-xl p-3 mb-4 text-center">
-          <span className="text-sm font-semibold" style={{ color: GOLD }}>🏆 G'olib: {finalMatch ? playerName(finalMatch.winnerId) : "—"}</span>
-        </div>
-      )}
-
-      <div style={{ overflowX: "auto", paddingBottom: 12 }}>
-        <div style={{ position: "relative", width: totalW, height: totalH }}>
-          {Array.from({ length: roundsCount }, (_, i) => (
-            <div key={`h-${i}`} style={{ position: "absolute", left: i * COL_W, top: 0, width: CARD_W, textAlign: "center", fontSize: 11, fontWeight: 600, letterSpacing: 0.5, color: GOLD, textTransform: "uppercase" }}>
-              {roundLabel(i + 1)}
-            </div>
-          ))}
-          <svg width={totalW} height={totalH} style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}>
-            {paths.map((d, i) => <path key={i} d={d} stroke="#2f7a5c" strokeWidth="1.5" fill="none" />)}
-          </svg>
-          {cards}
-        </div>
-      </div>
-
-      {selected && (
-        <Modal onClose={() => setSelectedId(null)}>
-          <h2 className="font-display text-lg font-semibold mb-1" style={{ color: CREAM }}>{selNum ? `#${selNum} · ` : ""}{roundLabel(selected.round)}</h2>
-          <p className="text-xs mb-4" style={{ color: "#8fa398" }}>{selected.status === "done" ? "Yakunlangan" : selected.status === "live" ? "O'ynalmoqda" : "Boshlanmagan"}</p>
-          <div style={{ background: FELT_DARK, borderRadius: 12 }} className="p-3 mb-3 space-y-1.5">
-            <div className="flex justify-between text-sm"><span style={{ color: selected.winnerId && selected.winnerId === selected.player1Id ? GOLD : CREAM }}>{selP1 || "—"}</span><span className="font-mono" style={{ color: CREAM }}>{selGames.filter((g) => g.winnerId === selected.player1Id).length}</span></div>
-            <div className="flex justify-between text-sm"><span style={{ color: selected.winnerId && selected.winnerId === selected.player2Id ? GOLD : CREAM }}>{selP2 || "—"}</span><span className="font-mono" style={{ color: CREAM }}>{selGames.filter((g) => g.winnerId === selected.player2Id).length}</span></div>
-          </div>
-          {selGames.length > 0 && (
-            <div className="mb-4">
-              <div className="text-[11px] mb-1.5" style={{ color: "#8fa398" }}>Partiyalar</div>
-              <div className="space-y-1">
-                {selGames.map((g) => (
-                  <div key={g.id} className="flex justify-between text-xs px-1" style={{ color: CREAM }}>
-                    <span>{g.gameNumber}-partiya</span><span className="font-mono">{g.p1Score} : {g.p2Score}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {selected.status === "pending" && selP1 && selP2 && (
-            <button onClick={() => { setSelectedId(null); setPickTableFor(selected.id); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl text-sm font-semibold">Boshlash</button>
-          )}
-          {selected.status === "pending" && !(selP1 && selP2) && (
-            <p className="text-xs text-center" style={{ color: "#8fa398" }}>Oldingi o'yinlar tugashini kuting</p>
-          )}
-          {selected.status === "live" && (selTableFree ? (
-            <button onClick={() => { setSelectedId(null); onEnterResult(selected.id); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl text-sm font-semibold">Natijani kiritish</button>
-          ) : (
-            <button onClick={() => { setSelectedId(null); onGoToTable(findHallIdForTable(selected.tableId)); }}
-              className="w-full py-3 rounded-xl text-sm font-semibold" style={{ background: "rgba(123,191,106,0.18)", color: "#7bbf6a" }}>
-              🔴 {selected.hallName} · {selected.tableName} stoliga o'tish
-            </button>
-          ))}
-        </Modal>
-      )}
-
-      {pickTableFor && (
-        <Modal onClose={() => setPickTableFor(null)}>
-          <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Qaysi stolda o'ynaladi?</h2>
-          <div className="space-y-3 max-h-80 overflow-y-auto">
-            {halls.map((h) => {
-              const free = h.tables.filter((t) => t.status === "free");
-              if (free.length === 0) return null;
-              return (
-                <div key={h.id}>
-                  <div className="text-[11px] font-semibold mb-1.5" style={{ color: "#b8c9bf" }}>{h.name}</div>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {free.map((t) => (
-                      <button key={t.id} onClick={() => { onStartMatch(pickTableFor, h.id, t.id); setPickTableFor(null); }}
-                        className="py-2 rounded-lg text-xs font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
-                        {t.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-            {halls.every((h) => h.tables.filter((t) => t.status === "free").length === 0) && (
-              <p className="text-sm text-center py-4" style={{ color: "#b8c9bf" }}>Hozircha bo'sh stol yo'q</p>
-            )}
-          </div>
-        </Modal>
-      )}
-    </div>
-  );
-}
-
 // ---------------- HALL ----------------
 function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtrasBatch, onAddExtraTime, onClose, onUpdateNote, onAddLap, onToast }) {
   const [showCreate, setShowCreate] = useState(false);
@@ -3601,14 +3025,7 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
   const rangeList = rangeActive ? filtered.filter((h) => h.endTime >= rangeStart && h.endTime <= rangeEnd) : [];
   const rangeSummary = summarize(rangeList);
 
-  function groupByShift(fullList) {
-    // Turnir o'yinlarini alohida guruhga ajratamiz (smena guruhlari bilan yonma-yon, ichiga emas)
-    const tournamentMap = {};
-    const list = [];
-    fullList.forEach((h) => {
-      if (h.tournamentName) (tournamentMap[h.tournamentName] = tournamentMap[h.tournamentName] || []).push(h);
-      else list.push(h);
-    });
+  function groupByShift(list) {
     const sorted = [...(shifts || [])].sort((a, b) => b.openedAt - a.openedAt);
     const groups = []; const used = new Set();
     sorted.forEach((s) => {
@@ -3618,12 +3035,6 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
         items.forEach((h) => used.add(h.id));
       }
     });
-    Object.entries(tournamentMap).forEach(([tName, items]) => {
-      const sortedItems = [...items].sort((a, b) => b.endTime - a.endTime);
-      groups.push({ key: `t-${tName}`, isTournament: true, label: tName, items: sortedItems, total: items.reduce((sum, h) => sum + h.total, 0) });
-    });
-    const latest = (g) => Math.max(...g.items.map((i) => i.endTime));
-    groups.sort((a, b) => latest(b) - latest(a));
     const rest = list.filter((h) => !used.has(h.id));
     if (rest.length > 0) groups.push({ key: "none", label: "Smenaga bog'liq emas", items: rest, total: rest.reduce((sum, h) => sum + h.total, 0) });
     return groups;
@@ -3664,7 +3075,7 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
               {shiftGroups.map((g) => (
                 <div key={g.key}>
                   <div className="flex justify-between items-center mb-1.5 px-1">
-                    <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>{g.isTournament ? `🏆 Turnir: ${g.label}` : `🕒 Smena: ${g.label}`}</span>
+                    <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
                     <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
                   </div>
                   <div className="space-y-1.5">
@@ -3691,7 +3102,7 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
         {allShiftGroups.map((g) => (
           <div key={g.key} className="pt-3">
             <div className="flex justify-between items-center px-5 pb-2">
-              <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>{g.isTournament ? `🏆 Turnir: ${g.label}` : `🕒 Smena: ${g.label}`}</span>
+              <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
               <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
             </div>
             {g.items.map((h) => (
