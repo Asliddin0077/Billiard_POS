@@ -16,7 +16,431 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.3.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.4.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+
+// ---------------- TIL (uz / ru) ----------------
+// Matnlar o'zbekcha yoziladi; "ru" tanlanganda ekrandagi matn lug'at bo'yicha ruschaga o'giriladi.
+const LANG_KEY = "billiard-pos-lang";
+const ADMIN_URL = "https://t.me/Asliddinamriddinov";
+let CUR_LANG = "uz";
+try { CUR_LANG = localStorage.getItem(LANG_KEY) === "ru" ? "ru" : "uz"; } catch (e) {}
+const RU_DICT = {
+"so'm": "сум",
+"Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz": "Вы вышли, так как выполнен вход на другом устройстве",
+"Telefon raqam noto'g'ri. Masalan: +998991234567": "Неверный номер телефона. Например: +998991234567",
+"Barcha maydonlarni to'g'ri to'ldiring (parol kamida 8 belgi)": "Заполните все поля правильно (пароль не менее 8 символов)",
+"Bu login band": "Этот логин занят",
+"Xatolik yuz berdi": "Произошла ошибка",
+"Parolni kiriting": "Введите пароль",
+"Login va parolni kiriting": "Введите логин и пароль",
+"Login yoki parol noto'g'ri": "Неверный логин или пароль",
+"Promokod noto'g'ri yoki ishlatilgan": "Промокод неверный или уже использован",
+"Obuna faollashtirildi!": "Подписка активирована!",
+"❌ Bepul sinov hozircha o'chirilgan": "❌ Бесплатный пробный период сейчас отключён",
+"❌ Siz avval bepul sinovdan foydalangansiz": "❌ Вы уже использовали бесплатный пробный период",
+"❌ Xatolik:": "❌ Ошибка:",
+"✅ Bepul sinov faollashtirildi!": "✅ Бесплатный пробный период активирован!",
+"soat 08:00gacha": "до 08:00",
+"❌ Skladda \"": "❌ На складе \"",
+"\" mavjud emas": "\" нет",
+"stolga sotildi": "продано на стол",
+"\" yetarli emas (": "\" недостаточно (",
+"dona bor)": "шт. в наличии)",
+"❌ Skladda faqat": "❌ На складе только",
+"dona bor": "шт.",
+"❌ Stol topilmadi, sahifani yangilang": "❌ Стол не найден, обновите страницу",
+"⚠️ Bu stol allaqachon yopilgan": "⚠️ Этот стол уже закрыт",
+"❌ STOL BO'SHADI, LEKIN HISOBOTGA YOZILMADI:": "❌ СТОЛ ОСВОБОДИЛСЯ, НО В ОТЧЁТ НЕ ЗАПИСАН:",
+"— DARHOL XABAR BERING, summa:": "— СРОЧНО СООБЩИТЕ, сумма:",
+"❌ Kutilmagan xatolik:": "❌ Непредвиденная ошибка:",
+"❌ Noto'g'ri qiymat": "❌ Неверное значение",
+"✅ Bepul sinov muddati": "✅ Срок бесплатного пробного периода",
+"kunga o'zgartirildi": "дн. изменён",
+"✅ Bepul sinov YOQILDI": "✅ Бесплатный пробный период ВКЛЮЧЁН",
+"⛔ Bepul sinov O'CHIRILDI": "⛔ Бесплатный пробный период ОТКЛЮЧЁН",
+"Xatolik: login band bo'lishi mumkin": "Ошибка: возможно, логин занят",
+"Bosh adminni o'chirib bo'lmaydi": "Главного администратора нельзя удалить",
+"Yangi parol kamida 8 belgi bo'lishi kerak": "Новый пароль должен содержать не менее 8 символов",
+"Eski parol noto'g'ri": "Старый пароль неверный",
+"Parol muvaffaqiyatli yangilandi": "Пароль успешно обновлён",
+"uchun akaunt yaratildi": "— аккаунт создан",
+"✅ Oylik berildi deb belgilandi": "✅ Зарплата отмечена как выплаченная",
+"✅ Smena ochildi": "✅ Смена открыта",
+"✅ Smena yopildi": "✅ Смена закрыта",
+"🔔 Yangi versiya chiqdi": "🔔 Вышла новая версия",
+"Yangilash": "Обновить",
+"Ilovani o'rnatish": "Установить приложение",
+"Kirish": "Войти",
+"Ro'yxatdan o'tish": "Регистрация",
+"Tizimga kirish": "Вход в систему",
+"Login": "Логин",
+"Parol": "Пароль",
+"Billiardxonangizni boshqarishni boshlang": "Начните управлять своим бильярдным клубом",
+"Ism": "Имя",
+"Telefon (+998991234567)": "Телефон (+998991234567)",
+"Bu login band, boshqasini tanlang": "Этот логин занят, выберите другой",
+"Parol kamida 8 belgidan iborat bo'lishi kerak": "Пароль должен содержать не менее 8 символов",
+"Akkauntingiz vaqtincha bloklangan": "Ваш аккаунт временно заблокирован",
+"Sabab:": "Причина:",
+"ko'rsatilmagan": "не указана",
+"Taxminan": "Примерно через",
+"kundan so'ng qayta urinib ko'ring": "дн. попробуйте снова",
+"Chiqish": "Выйти",
+"Xush kelibsiz,": "Добро пожаловать,",
+"Davom etish uchun obuna kerak": "Для продолжения нужна подписка",
+"Hozircha tariflar sozlanmagan. Birozdan so'ng qayta urinib ko'ring.": "Тарифы пока не настроены. Попробуйте чуть позже.",
+"TEJAMLI": "ВЫГОДНО",
+"To'lov qilish": "Оплатить",
+"🎁 Tekinga": "🎁 Бесплатно",
+"kun ishlatish": "дн. попробовать",
+"Tugmani bosgach @Billiard_pos_bot ochiladi — u yerda to'lov cheki yuborasiz, tasdiqlangach obunangiz faollashadi.": "После нажатия откроется @Billiard_pos_bot — там отправьте чек об оплате, после подтверждения подписка активируется.",
+"Promokodingiz bormi?": "Есть промокод?",
+"Faollashtirish": "Активировать",
+"Qo'llanma": "Инструкция",
+"Sozlamalar": "Настройки",
+"Yordam": "Помощь",
+"Statistika": "Статистика",
+"Salom,": "Здравствуйте,",
+"Obunangiz": "Ваша подписка",
+"kundan keyin tugaydi": "дн. закончится",
+"🟢 Smena ochiq": "🟢 Смена открыта",
+"dan beri": "с",
+"Yopish": "Закрыть",
+"Smena ochilmagan": "Смена не открыта",
+"Smena ochish": "Открыть смену",
+"🔔 Oylik berish vaqti keldi": "🔔 Пора выплатить зарплату",
+"Berdim": "Выплатил",
+"Moliya": "Финансы",
+"Xodimlar": "Сотрудники",
+"Sklad": "Склад",
+"Qarz daftari": "Долговая книга",
+"Ilovadan birinchi marta foydalanyapsizmi?": "Впервые пользуетесь приложением?",
+"Qo'llanmani ochish uchun shu yerga bosing": "Нажмите здесь, чтобы открыть инструкцию",
+"Qo'llanmalar": "Инструкции",
+"Foydalanish qo'llanmasi": "Руководство пользователя",
+"Ilovadan qanday foydalanish, qadam-baqadam": "Как пользоваться приложением, шаг за шагом",
+"Ilovani o'rnatish qo'llanmasi": "Как установить приложение",
+"Android, iPhone va kompyuterga o'rnatish": "Установка на Android, iPhone и компьютер",
+"Parolni almashtirish": "Сменить пароль",
+"Eski parol": "Старый пароль",
+"Yangi parol (kamida 8 belgi)": "Новый пароль (не менее 8 символов)",
+"Saqlash": "Сохранить",
+"Akauntdan chiqasizmi?": "Выйти из аккаунта?",
+"Ilova versiyasi:": "Версия приложения:",
+"Zallar": "Залы",
+"Bar": "Бар",
+"stol ·": "столов ·",
+"\" zalini o'chirasizmi?": "\" зал будет удалён. Продолжить?",
+"Yangi zal": "Новый зал",
+"Yangi mahsulot qo'shish": "Добавить новый товар",
+"Nomi, masalan Kola": "Название, например Кола",
+"Sotish narxi": "Цена продажи",
+"Tannarx (ixtiyoriy)": "Себестоимость (необязательно)",
+"Qo'shish": "Добавить",
+"Narx va tannarxni faqat boshliq o'zgartira oladi.": "Цену и себестоимость может менять только владелец.",
+"Hali mahsulot yo'q": "Товаров пока нет",
+"Tannarx:": "Себестоимость:",
+"Zal yaratish": "Создать зал",
+"Zal nomi, masalan 1-qavat": "Название зала, например 1-й этаж",
+"Yaratish": "Создать",
+"Zal nomini tahrirlash": "Изменить название зала",
+"Naqd": "Наличные",
+"Karta": "Карта",
+"Jami": "Итого",
+"Yopilgan stollar": "Закрытые столы",
+"Jami o'ynalgan vaqt": "Всего времени игры",
+"Sklad savdolari": "Продажи со склада",
+"Smenani yopish": "Закрыть смену",
+"Noma'lum": "Неизвестно",
+"Smenaga bog'liq emas": "Вне смен",
+"⚠️ Kam qolgan tovarlar": "⚠️ Заканчивающиеся товары",
+"dona qoldi": "шт. осталось",
+"Qoldiq": "Остаток",
+"Hisobot": "Отчёт",
+"Tovar qo'shish": "Добавить товар",
+"Hozircha sklad bo'sh": "Склад пока пуст",
+"Kam qolish chegarasi:": "Порог «мало»:",
+"Sotish": "Продать",
+"Ayirish": "Списать",
+"Kunlik": "За день",
+"Haftalik": "За неделю",
+"Oylik": "За месяц",
+"Yoki aniq sana tanlang": "Или выберите точную дату",
+"Tozalash": "Сбросить",
+"Jami sotilgan:": "Всего продано:",
+"Shu davrda sotuv bo'lmagan": "За этот период продаж не было",
+"to'g'ridan-to'g'ri sotildi": "продано напрямую",
+"Kirim/chiqim tarixi (qo'shilgan/ayirilgan) —": "История прихода/расхода (добавлено/списано) —",
+"qo'shildi": "добавлено",
+"Mahsulot": "Товар",
+"Necha blok": "Сколько блоков",
+"1 blokda nechta": "Сколько в одном блоке",
+"Sana": "Дата",
+"Jami:": "Итого:",
+"dona qo'shiladi": "шт. будет добавлено",
+"Izoh (ixtiyoriy)": "Комментарий (необязательно)",
+"skladga qo'shildi": "добавлено на склад",
+"\"dan ayirish": "\": списать",
+"Hozir:": "Сейчас:",
+"Sababi (ixtiyoriy) — masalan adashib ko'p qo'shilgan edi": "Причина (необязательно) — например, добавлено по ошибке",
+"dan ayrildi": " — списано",
+"\" sotish": "\": продажа",
+"Stoldan tashqari — mijoz shunchaki sotib olganda. Hozir:": "Вне стола — когда клиент просто покупает. Сейчас:",
+"Necha dona": "Сколько штук",
+"To'lov turi": "Способ оплаты",
+"sotildi": "продано",
+"🔔 Bugun qaytarilishi kerak edi": "🔔 Сегодня нужно было вернуть",
+"Qarzdorlar (": "Должники (",
+"Yopilgan (": "Закрытые (",
+"Qarzdor qo'shish": "Добавить должника",
+"Qarzdor yo'q": "Должников нет",
+"to'landi (": "оплачено (",
+"qarz qo'shildi": "долг добавлен",
+"· qaytarish:": "· вернуть до:",
+"· jami:": "· всего:",
+"to'langan": "оплачено",
+"· yozgan:": "· записал:",
+"+ Qarz qo'shish": "+ Добавить долг",
+"Qarzni qoplash": "Погасить долг",
+"Hozircha yo'q": "Пока нет",
+"Yopilgan sana:": "Дата закрытия:",
+"to'landi": "оплачено",
+"Ismi": "Имя",
+"Telefon raqami": "Номер телефона",
+"Qarz summasi": "Сумма долга",
+"Qarz sanasi": "Дата долга",
+"Qaytaradigan sana": "Дата возврата",
+"\"ga qarz qo'shish": "\": добавить долг",
+"Yangi qarzdor yaratmasdan, hozirgi qarziga ustiga qo'shiladi. Hozirgi qoldiq:": "Новый должник не создаётся — сумма добавится к текущему долгу. Текущий остаток:",
+"Qancha qarz bo'ldi": "Сколько долга добавить",
+"✅ Qarzga qo'shildi": "✅ Добавлено к долгу",
+"\" qarzini qoplash": "\": погашение долга",
+"Qoldiq qarz:": "Остаток долга:",
+"✅ Qarz to'liq yopildi": "✅ Долг полностью закрыт",
+"Umumiy qarzni to'liq yopish": "Закрыть весь долг полностью",
+"Qancha to'ladi (summasini kiriting)": "Сколько оплатил (введите сумму)",
+"Qoladi:": "Останется:",
+"✅ To'lov qabul qilindi": "✅ Платёж принят",
+"Kiritish": "Внести",
+"Moliya — Bar": "Финансы — Бар",
+"Bugun": "Сегодня",
+"7 kun": "7 дней",
+"30 kun": "30 дней",
+"To'lov turi bo'yicha": "По способу оплаты",
+"Bar tushumi": "Выручка бара",
+"Mahsulot tannarxi": "Себестоимость товаров",
+"Sof foyda (bar)": "Чистая прибыль (бар)",
+"Faqat bar/sklad savdolari hisoblanadi — stol vaqti kirmaydi. Hozir ochiq turgan stollarning bari yopilgach hisobga qo'shiladi.": "Учитываются только продажи бара/склада — время стола не входит. Бар открытых столов добавится после их закрытия.",
+"Yangi xodim": "Новый сотрудник",
+"Hozircha xodim yo'q": "Сотрудников пока нет",
+"\" akauntini o'chirasizmi?": "\" аккаунт будет удалён. Продолжить?",
+"Login:": "Логин:",
+"So'nggi 30 kun:": "Последние 30 дней:",
+"ta stol yopdi ·": "стол(ов) закрыл ·",
+"soat ishladi": "ч. отработал",
+"Oylik:": "Зарплата:",
+"· har oyning": "· каждого месяца,",
+"Summa": "Сумма",
+"Kuni (1-31)": "День (1–31)",
+"+ Oylik belgilash": "+ Назначить зарплату",
+"✓ Shu oy uchun berilgan": "✓ Выплачено за этот месяц",
+"Bu oy uchun \"Berdim\"": "«Выплатил» за этот месяц",
+"berildi (": "выплачено (",
+"Yangi xodim qo'shish": "Добавить сотрудника",
+"Login (u shu bilan kiradi)": "Логин (по нему он входит)",
+"Parol (kamida 8 belgi)": "Пароль (не менее 8 символов)",
+"\" stolini o'chirasizmi?": "\" стол будет удалён. Продолжить?",
+"Qo'shimcha vaqt qo'shish": "Добавить время",
+"Hozirgi hisobni ko'rish": "Посмотреть текущий счёт",
+"Vaqt tugadi!": "Время вышло!",
+"Qoldi:": "Осталось:",
+"ta znak qo'yilgan": "отметок поставлено",
+"Izoh": "Комментарий",
+"Znak qo'yish": "Поставить отметку",
+"O'tkazish": "Перенести",
+"Pauza": "Пауза",
+"Davom ettirish": "Продолжить",
+"Vaqtni ochish": "Открыть время",
+"Stol qo'shish": "Добавить стол",
+"Stol nomi, masalan Stol 1": "Название стола, например Стол 1",
+"1 soat narxi (so'm)": "Цена за 1 час (сум)",
+"Stolni tahrirlash": "Изменить стол",
+"\" da o'ynashni boshlaysizmi?": "\": начать игру?",
+"Narx:": "Цена:",
+"Cheksiz (VIP)": "Без лимита (VIP)",
+"Summa bo'yicha": "По сумме",
+"To'langan summa (so'm)": "Оплаченная сумма (сум)",
+"masalan 35000": "например 35000",
+"vaqt beriladi, tugaganda ovozli ogohlantirish keladi": "времени будет дано, по окончании прозвучит сигнал",
+"Bekor": "Отмена",
+"Boshlash": "Начать",
+"— mahsulot qo'shish": "— добавить товар",
+"Qidirish...": "Поиск...",
+"Bar bo'sh. \"Bar\" bo'limidan mahsulot qo'shing.": "Бар пуст. Добавьте товары в разделе «Бар».",
+"ta mahsulot": "товаров",
+"✅ Mahsulotlar qo'shildi": "✅ Товары добавлены",
+"OK": "ОК",
+"\" ni yopasizmi?": "\" — закрыть?",
+"Chek tayyorlanadi va stol bo'shatiladi": "Будет сформирован чек, стол освободится",
+"— izoh": "— комментарий",
+"Masalan: mijoz VIP, chegirma bor...": "Например: клиент VIP, есть скидка...",
+"— znak qo'yish": "— поставить отметку",
+"Hozirgi segment (oxirgi znakdan yoki boshlanishdan hozirgacha) alohida yozib qo'yiladi, stol yopilmaydi.": "Текущий отрезок (от последней отметки или от начала до сейчас) записывается отдельно, стол не закрывается.",
+"Shu segment:": "Этот отрезок:",
+"Izoh (ixtiyoriy) — masalan kim o'ynadi": "Комментарий (необязательно) — например, кто играл",
+"\"ga vaqt qo'shish": "\": добавить время",
+"Masalan band bo'lib vaqtida ochishga ulgurmagan bo'lsangiz — necha daqiqa o'tganini kiriting, hisoblagichga shuncha qo'shiladi.": "Например, если не успели вовремя открыть стол — введите, сколько минут прошло, столько добавится к счётчику.",
+"Necha daqiqa qo'shilsin": "Сколько минут добавить",
+"masalan 15": "например 15",
+"daqiqa qo'shildi": "мин. добавлено",
+"hozirgi, davom etmoqda": "текущий, продолжается",
+"Stol yopilmadi — bu shunchaki hozirgi hisob": "Стол не закрыт — это просто текущий счёт",
+"\"ni ko'chirish": "\": перенос",
+"Hisoblagich, izoh va mahsulotlar shu bo'sh stolga o'tadi, \"": "Счётчик, комментарий и товары перейдут на этот свободный стол, а \"",
+"\" esa bo'shab qoladi.": "\" освободится.",
+"Hozircha bo'sh stol yo'q": "Свободных столов пока нет",
+"ko'chirildi": "перенесён",
+"Ko'chirish": "Перенести",
+"Tasdiqlash": "Подтвердить",
+"CHEK": "ЧЕК",
+"O'yin vaqti": "Время игры",
+"Stol narxi": "Стоимость стола",
+"🚩 Znaklar bo'yicha taqsimot": "🚩 Распределение по отметкам",
+"Mahsulot ×": "Товар ×",
+"Orqaga": "Назад",
+"Bugungi hisobot": "Отчёт за сегодня",
+"08:00 dan hozirgacha": "с 08:00 до сейчас",
+"ta yozuv": "записей",
+"Hali bugun yozuv yo'q": "Сегодня записей ещё нет",
+"Umumiy": "Общее",
+"Sana oralig'ini tanlang": "Выберите период",
+"Shu oraliqda yopilgan stol yo'q": "За этот период закрытых столов нет",
+"🕒 Smena:": "🕒 Смена:",
+"· Ochdi:": "· Открыл:",
+"· Yopdi:": "· Закрыл:",
+"UMUMIY CHEK — barcha yopilgan stollar": "ОБЩИЙ ЧЕК — все закрытые столы",
+"Hali tarix yo'q": "Истории пока нет",
+"Jami (": "Итого (",
+"Yordam / Support": "Помощь / Поддержка",
+"Hali xabar yo'q. Savolingizni yozing.": "Сообщений пока нет. Напишите свой вопрос.",
+"Xabar yozing...": "Напишите сообщение...",
+"Billiard POS — Admin": "Billiard POS — Админ",
+"Tarix — smena bo'yicha": "История — по сменам",
+"Zal yo'q": "Залов нет",
+"Bar menyu": "Меню бара",
+"Mahsulot yo'q": "Товаров нет",
+"oddiy": "обычный",
+"naqd": "наличные",
+"karta": "карта",
+"Naqd pul": "Наличные",
+"Bo'sh": "Свободен",
+"Ishlayapti": "Идёт игра",
+"Pauzada": "На паузе",
+"Admin": "Админ",
+"Adminga yozish": "Написать админу",
+"Til": "Язык",
+"Support": "Поддержка",
+"Savolingiz bormi? Adminga yozing": "Есть вопрос? Напишите админу",
+"Obuna muddati tugagan. Adminga yozing yoki obuna sotib oling": "Срок подписки истёк. Напишите админу или оформите подписку",
+"O'chirish": "Удалить",
+"Hali xabar yo'q": "Сообщений пока нет",
+"❌ Noto'g'ri qiymat kiritildi": "❌ Введено неверное значение",
+"Smena:": "Смена:"
+};
+const RU_PAT = [
+  [/so'm\b/g, "сум"],
+  [/(\d{2}\.\d{2}\.\d{4}) gacha/g, "до $1"],
+  [/(\d+) oylik/g, "$1 мес."],
+  [/(\d+) kun\b/g, "$1 дн."],
+  [/(\d+) ta\b/g, "$1 шт."]
+];
+const RU_SUB = Object.keys(RU_DICT).filter((k) => k.length >= 5).sort((a, b) => b.length - a.length);
+function trRu(s) {
+  if (!s) return s;
+  const core = s.trim();
+  if (!core) return s;
+  if (Object.prototype.hasOwnProperty.call(RU_DICT, core)) return s.replace(core, RU_DICT[core]);
+  let out = s;
+  for (const k of RU_SUB) { if (out.indexOf(k) !== -1) out = out.split(k).join(RU_DICT[k]); }
+  for (const [re, rep] of RU_PAT) out = out.replace(re, rep);
+  return out;
+}
+const _nodeRec = new WeakMap();
+const _attrRec = new WeakMap();
+const SKIP_TAGS = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, INPUT: 1, CODE: 1 };
+function trNode(n) {
+  const p = n.parentNode;
+  if (!p || SKIP_TAGS[p.nodeName]) return;
+  const v = n.nodeValue;
+  if (!v || !v.trim()) return;
+  const rec = _nodeRec.get(n);
+  if (rec && rec.shown === v) return;
+  const t = trRu(v);
+  _nodeRec.set(n, { orig: v, shown: t });
+  if (t !== v) n.nodeValue = t;
+}
+function trAttrs(el) {
+  if (!el.getAttribute) return;
+  for (const a of ["placeholder", "title"]) {
+    const v = el.getAttribute(a);
+    if (!v) continue;
+    let rec = _attrRec.get(el);
+    if (!rec) { rec = {}; _attrRec.set(el, rec); }
+    if (rec[a] && rec[a].shown === v) continue;
+    const t = trRu(v);
+    rec[a] = { orig: v, shown: t };
+    if (t !== v) el.setAttribute(a, t);
+  }
+}
+function walkI18n(root, restore) {
+  if (!root) return;
+  if (root.nodeType === 3) {
+    if (restore) { const r = _nodeRec.get(root); if (r && r.shown === root.nodeValue && r.orig !== r.shown) root.nodeValue = r.orig; _nodeRec.delete(root); }
+    else trNode(root);
+    return;
+  }
+  if (root.nodeType !== 1 && root.nodeType !== 9) return;
+  const tw = document.createTreeWalker(root, 4);
+  let n;
+  while ((n = tw.nextNode())) walkI18n(n, restore);
+  const els = root.querySelectorAll ? root.querySelectorAll("[placeholder],[title]") : [];
+  const list = root.nodeType === 1 ? [root, ...els] : [...els];
+  for (const el of list) {
+    if (restore) {
+      const rec = _attrRec.get(el);
+      if (rec) for (const a of Object.keys(rec)) if (el.getAttribute(a) === rec[a].shown) el.setAttribute(a, rec[a].orig);
+      _attrRec.delete(el);
+    } else trAttrs(el);
+  }
+}
+let _i18nObs = null;
+function startI18n() {
+  if (typeof document === "undefined" || _i18nObs) return;
+  document.documentElement.lang = CUR_LANG;
+  _i18nObs = new MutationObserver((muts) => {
+    if (CUR_LANG !== "ru") return;
+    for (const m of muts) {
+      if (m.type === "characterData") trNode(m.target);
+      else if (m.type === "attributes") trAttrs(m.target);
+      else m.addedNodes.forEach((x) => walkI18n(x, false));
+    }
+  });
+  _i18nObs.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["placeholder", "title"] });
+  if (CUR_LANG === "ru") walkI18n(document.body, false);
+}
+function setLang(l) {
+  CUR_LANG = l === "ru" ? "ru" : "uz";
+  try { localStorage.setItem(LANG_KEY, CUR_LANG); } catch (e) {}
+  document.documentElement.lang = CUR_LANG;
+  walkI18n(document.body, CUR_LANG !== "ru");
+}
+if (typeof window !== "undefined" && !window.__i18nDialogs) {
+  window.__i18nDialogs = true;
+  ["alert", "confirm", "prompt"].forEach((k) => {
+    const orig = window[k].bind(window);
+    window[k] = (m, ...rest) => orig(CUR_LANG === "ru" ? trRu(String(m)) : m, ...rest);
+  });
+}
 
 // ---------------- helpers ----------------
 function fmtMoney(n) { return Math.round(n || 0).toLocaleString("ru-RU").replace(/,/g, " ") + " so'm"; }
@@ -226,6 +650,7 @@ async function fetchAdminData() {
 }
 
 export default function BilliardPOS() {
+  useEffect(() => { startI18n(); }, []);
   const [loaded, setLoaded] = useState(false);
   const [screen, setScreen] = useState("auth");
   const [toast, setToast] = useState(null);
@@ -1186,6 +1611,28 @@ function Logo() {
   );
 }
 
+
+function LangSwitch() {
+  const [lang, setL] = useState(CUR_LANG);
+  return (
+    <div className="inline-flex rounded-lg overflow-hidden" style={{ border: `1px solid ${FELT_LIGHT}` }}>
+      {[["uz", "UZ"], ["ru", "RU"]].map(([k, l]) => (
+        <button key={k} onClick={() => { setLang(k); setL(k); }} className="px-3 py-1 text-xs font-semibold"
+          style={{ background: lang === k ? GOLD : FELT, color: lang === k ? FELT_DARK : CREAM }}>{l}</button>
+      ))}
+    </div>
+  );
+}
+function SupportLink() {
+  return (
+    <a href={ADMIN_URL} target="_blank" rel="noopener noreferrer"
+      style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}`, color: CREAM }}
+      className="w-full px-4 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+      <MessageCircle size={16} style={{ color: GOLD }} /> Adminga yozish
+    </a>
+  );
+}
+
 // ---------------- AUTH ----------------
 function AuthScreen({ onRegister, onLogin }) {
   const [tab, setTab] = useState("login");
@@ -1221,6 +1668,7 @@ function AuthScreen({ onRegister, onLogin }) {
   return (
     <div className="min-h-screen flex items-center justify-center px-5 py-10">
       <div className="w-full max-w-sm">
+        <div className="flex justify-end mb-3"><LangSwitch /></div>
         <div className="flex justify-center mb-8"><Logo /></div>
         <div className="flex mb-4 rounded-xl overflow-hidden" style={{ border: `1px solid ${FELT_LIGHT}` }}>
           <button onClick={() => setTab("login")} className="flex-1 py-2.5 text-sm font-medium"
@@ -1281,6 +1729,8 @@ function BannedScreen({ user, onLogout }) {
         <h1 className="font-display text-xl font-semibold mb-2" style={{ color: CREAM }}>Akkauntingiz vaqtincha bloklangan</h1>
         <p className="text-sm mb-1" style={{ color: "#b8c9bf" }}>Sabab: {user.banReason || "ko'rsatilmagan"}</p>
         <p className="text-sm mb-6" style={{ color: "#b8c9bf" }}>Taxminan {daysLeft > 0 ? daysLeft : 1} kundan so'ng qayta urinib ko'ring</p>
+        <div className="mb-4"><SupportLink /></div>
+        <div className="mb-4"><LangSwitch /></div>
         <button onClick={onLogout} className="text-sm underline" style={{ color: GOLD }}>Chiqish</button>
       </div>
     </div>
@@ -1296,7 +1746,10 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
       <div className="w-full max-w-sm">
         <div className="flex justify-between items-center mb-6">
           <p className="text-sm" style={{ color: "#b8c9bf" }}>Xush kelibsiz, <span style={{ color: CREAM }} className="font-medium">{user.name}</span></p>
-          <button onClick={onLogout} className="text-xs opacity-60 flex items-center gap-1" style={{ color: CREAM }}><LogOut size={13} /> Chiqish</button>
+          <div className="flex items-center gap-3">
+            <LangSwitch />
+            <button onClick={onLogout} className="text-xs opacity-60 flex items-center gap-1" style={{ color: CREAM }}><LogOut size={13} /> Chiqish</button>
+          </div>
         </div>
         <div className="text-xs mb-3 px-3 py-1.5 rounded-full inline-block" style={{ background: "rgba(178,58,58,0.15)", color: "#e88" }}>
           Davom etish uchun obuna kerak
@@ -1342,6 +1795,8 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
             <button onClick={() => onPromo(code)} style={{ border: `1px solid ${GOLD}`, color: GOLD }} className="px-4 py-2.5 rounded-xl text-sm font-medium">Faollashtirish</button>
           </div>
         </div>
+
+        <div className="mt-3"><SupportLink /></div>
       </div>
     </div>
   );
@@ -1526,6 +1981,11 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
             className="w-full mt-3 py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2" style={{ background: FELT_DARK, color: "#ff8a8a", border: "1px solid #b23a3a" }}>
             <LogOut size={15} /> Chiqish
           </button>
+          <div className="mt-3"><SupportLink /></div>
+          <div className="flex items-center justify-between mt-4">
+            <span className="text-xs" style={{ color: "#8fa398" }}>Til</span>
+            <LangSwitch />
+          </div>
           <p className="text-center text-xs mt-4" style={{ color: "#8fa398" }}>Ilova versiyasi: {APP_VERSION}</p>
         </Modal>
       )}
