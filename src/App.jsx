@@ -16,15 +16,69 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.4.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.6.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- TIL (uz / ru) ----------------
 // Matnlar o'zbekcha yoziladi; "ru" tanlanganda ekrandagi matn lug'at bo'yicha ruschaga o'giriladi.
 const LANG_KEY = "billiard-pos-lang";
 const ADMIN_URL = "https://t.me/Asliddinamriddinov";
+const BOT_URL = "https://t.me/Billiard_pos_bot";
+let SUPPORT_UID = null;
+function supportUrl() { return `${BOT_URL}?start=support${SUPPORT_UID ? "_" + SUPPORT_UID : ""}`; }
+function isPro(u) { return !u || u.accountType === "vip" || u.planTier !== "basic"; }
+function proOn(u) { return !!u && (isPro(u) || u.betaAccess); }
+const TIER_FEATURES = {
+  basic: ["Stollar va vaqt hisobi", "Bar menyu", "Smenalar", "Statistika", "Posik maslahatlari"],
+  pro: ["Oddiy tarifdagi hammasi", "Sklad (ombor)", "Qarz daftari", "Xodimlar va oylik", "Moliya", "Telegram'da kunlik hisobot", "Posik tabriklari Telegram'da"],
+};
 let CUR_LANG = "uz";
 try { CUR_LANG = localStorage.getItem(LANG_KEY) === "ru" ? "ru" : "uz"; } catch (e) {}
 const RU_DICT = {
+"Bu imkoniyat ⭐ Pro tarifda": "Эта функция в тарифе ⭐ Pro",
+"Pro tarifga o'tsangiz, hammasi ochiladi:": "Перейдите на Pro — откроется всё:",
+"Pro tarifga o'tish": "Перейти на Pro",
+"Keyinroq": "Позже",
+"Telegram ulangan ✅": "Telegram подключён ✅",
+"Telegram'da kunlik hisobot": "Ежедневный отчёт в Telegram",
+"Posik har kuni ertalab 09:00 da kechagi kun hisobotini yuboradi": "Посик каждое утро в 09:00 присылает отчёт за вчера",
+"⭐ Pro tarifda ishlaydi": "Работает в тарифе ⭐ Pro",
+"Stollar va vaqt hisobi": "Столы и учёт времени",
+"Smenalar": "Смены",
+"Posik maslahatlari": "Подсказки Посика",
+"Oddiy tarifdagi hammasi": "Всё из тарифа Обычный",
+"Sklad (ombor)": "Склад",
+"Xodimlar va oylik": "Сотрудники и зарплата",
+"Posik tabriklari Telegram'da": "Поздравления Посика в Telegram",
+"🟢 Oddiy": "🟢 Обычный",
+"⭐ Pro": "⭐ Pro",
+"TAVSIYA": "РЕКОМЕНДУЕМ",
+"Tabriklayman! 🎉": "Поздравляю! 🎉",
+"Rahmat, Posik! 💜": "Спасибо, Посик! 💜",
+"Bugun allaqachon 25 ta stol yopildi! Ish qizib ketdi 🔥": "Сегодня уже закрыто 25 столов! Работа кипит 🔥",
+"Bugun 50 ta stol yopildi! Zo'r kun bo'lyapti! 💪": "Сегодня закрыто 50 столов! Отличный день! 💪",
+"Bugun 100 ta stol!!! Siz haqiqiy chempionsiz! 🏆": "Сегодня 100 столов!!! Вы настоящий чемпион! 🏆",
+"150 ta stol! Rekord kun! 🚀": "150 столов! Рекордный день! 🚀",
+"200 ta stol! Afsonaviy kun! 👑": "200 столов! Легендарный день! 👑",
+"Stolni yopishdan oldin barni qo'shishni unutmang — hammasi bitta chekda chiqadi!": "Перед закрытием стола не забудьте добавить бар — всё выйдет одним чеком!",
+"Mijoz kutib tursa, Pauza bosing — vaqt to'xtaydi, pul ham ortiqcha yozilmaydi.": "Если клиент ждёт — нажмите Пауза: время остановится, лишнее не начислится.",
+"Smenani ochib-yopsangiz, kim qancha ishlaganini aniq bilasiz.": "Открывайте и закрывайте смены — будете точно знать, кто сколько работал.",
+"Statistikada qaysi soatlarda klub to'la bo'lishini ko'rasiz 📊": "В статистике видно, в какие часы клуб полон 📊",
+"Qarz daftariga yozib qo'ysangiz, hech kim, hech narsa unutilmaydi 📒": "Записывайте в книгу долгов — никто и ничего не забудется 📒",
+"Skladni to'ldirib qo'ying — bar sotilganda zaxira o'zi kamayadi.": "Заполните склад — при продаже бара остаток уменьшится сам.",
+"Xodim qo'shsangiz, kim stol ochib-yopganini ko'rib turasiz.": "Добавьте сотрудников — будете видеть, кто открывал и закрывал столы.",
+"Savolingiz bormi? Menga bosing — admin bilan bog'layman! 💜": "Есть вопрос? Нажмите на меня — свяжу с админом! 💜",
+"Ilovani telefonga o'rnatib olsangiz, bir bosishda ochiladi 📲": "Установите приложение на телефон — будет открываться в одно касание 📲",
+"Obuna tugashidan oldin uzaytirsangiz, qolgan kunlar kuyib ketmaydi — ustiga qo'shiladi.": "Продлите подписку заранее — оставшиеся дни не сгорят, а добавятся.",
+"Salom! Men Posik 💜 Savolingiz bo'lsa, menga bosing!": "Привет! Я Посик 💜 Есть вопрос — нажмите на меня!",
+"Ro'yxatdan o'tsangiz, 3 kun tekin sinab ko'rasiz 😉": "Зарегистрируйтесь — 3 дня бесплатно 😉",
+"Parolni unutdingizmi? Menga bosing — admin yordam beradi.": "Забыли пароль? Нажмите на меня — админ поможет.",
+"Keling, birinchi zalingizni qo'shamiz — pastdagi tugmani bosing! 🎱": "Давайте добавим первый зал — нажмите кнопку ниже! 🎱",
+"Posik": "Посик",
+"Narxni o'zgartirish": "Изменить цену",
+"Tarif turi": "Тип тарифа",
+"✅ Narx yangilandi": "✅ Цена обновлена",
+"🟢 Oddiyga o'tkazish": "🟢 Перевести на Обычный",
+"⭐ Pro qilish": "⭐ Сделать Pro",
 "so'm": "сум",
 "Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz": "Вы вышли, так как выполнен вход на другом устройстве",
 "Telefon raqam noto'g'ri. Masalan: +998991234567": "Неверный номер телефона. Например: +998991234567",
@@ -102,6 +156,13 @@ const RU_DICT = {
 "Statistika": "Статистика",
 "Salom,": "Здравствуйте,",
 "Obunangiz": "Ваша подписка",
+"← Orqaga": "← Назад",
+"Joriy obuna": "Текущая подписка",
+"Yangi obuna qolgan kunlarga qo'shiladi. Masalan: 15 kun qolgan + 30 kun = 45 kun.": "Новая подписка добавляется к оставшимся дням. Например: осталось 15 дн. + 30 дн. = 45 дн.",
+"Obuna tez orada tugaydi": "Подписка скоро закончится",
+"Obuna faol": "Подписка активна",
+"Uzaytirish": "Продлить",
+"+ Kun qo'shish": "+ Добавить дни",
 "kundan keyin tugaydi": "дн. закончится",
 "🟢 Smena ochiq": "🟢 Смена открыта",
 "dan beri": "с",
@@ -350,6 +411,8 @@ const RU_DICT = {
 const RU_PAT = [
   [/so'm\b/g, "сум"],
   [/(\d{2}\.\d{2}\.\d{4}) gacha/g, "до $1"],
+  [/(\d+) kun qoldi/g, "осталось $1 дн."],
+  [/Yangi tugash sanasi: /g, "Новая дата окончания: "],
   [/(\d+) oylik/g, "$1 мес."],
   [/(\d+) kun\b/g, "$1 дн."],
   [/(\d+) ta\b/g, "$1 шт."]
@@ -504,6 +567,8 @@ function computeNewUntil(currentUntilMs, days) {
   return target.getTime();
 }
 
+function subDaysLeft(until) { return Math.max(0, Math.ceil((until - Date.now()) / 86400000)); }
+
 // ---------------- DB row -> JS object mapping ----------------
 function mapUser(row) {
   if (!row) return null;
@@ -515,6 +580,7 @@ function mapUser(row) {
     subscriptionUntil: row.subscription_until ? new Date(row.subscription_until).getTime() : null,
     role: row.role || "owner", parentOwnerId: row.parent_owner_id || null,
     trialUsed: !!row.trial_used,
+    planTier: row.plan_tier || null, telegramVerified: !!row.telegram_verified,
   };
 }
 function ownerIdOf(u) { return u && u.role === "staff" && u.parentOwnerId ? u.parentOwnerId : (u ? u.id : null); }
@@ -562,7 +628,7 @@ function mapHistory(row) {
 function mapPromo(row) { return { code: row.code, durationDays: row.duration_days || 30, used: row.used, usedBy: row.used_by }; }
 function mapChat(row) { return { id: row.id, ownerId: row.owner_id, from: row.from_role, text: row.message, broadcast: row.broadcast, readByAdmin: row.read_by_admin, readByUser: row.read_by_user, ts: new Date(row.created_at).getTime() }; }
 function mapAdmin(row) { return { login: row.login, name: row.name, createdAt: new Date(row.created_at).getTime() }; }
-function mapPlan(row) { return { id: row.id, label: row.label, months: Number(row.months), days: row.days, price: Number(row.price), active: row.active }; }
+function mapPlan(row) { return { id: row.id, label: row.label, months: Number(row.months), days: row.days, price: Number(row.price), active: row.active, tier: row.tier === "basic" ? "basic" : "pro" }; }
 function mapWarehouseItem(row) { return { id: row.id, barItemId: row.bar_item_id, name: row.name, units: Number(row.units_in_stock || 0), lowStockThreshold: Number(row.low_stock_threshold != null ? row.low_stock_threshold : 5) }; }
 function mapWarehouseLog(row) {
   return { id: row.id, warehouseItemId: row.warehouse_item_id, changeUnits: Number(row.change_units), type: row.type,
@@ -650,6 +716,7 @@ async function fetchAdminData() {
 }
 
 export default function BilliardPOS() {
+  const [celebrate, setCelebrate] = useState(null);
   useEffect(() => { startI18n(); }, []);
   const [loaded, setLoaded] = useState(false);
   const [screen, setScreen] = useState("auth");
@@ -925,6 +992,19 @@ export default function BilliardPOS() {
     setActiveHallId(null); setScreen("auth");
   }
 
+  useEffect(() => {
+    if (!currentUser || !history || !history.length) return;
+    const now = new Date(); const start = new Date(now); start.setHours(8, 0, 0, 0);
+    if (now < start) start.setDate(start.getDate() - 1);
+    const n = history.filter((h) => h.endTime >= start.getTime()).length;
+    const reached = [25, 50, 100, 150, 200].filter((m) => n >= m);
+    if (!reached.length) return;
+    const m = reached[reached.length - 1];
+    const key = `posik-cel-${ownerIdOf(currentUser)}-${start.getFullYear()}-${start.getMonth() + 1}-${start.getDate()}-${m}`;
+    try { if (localStorage.getItem(key)) return; localStorage.setItem(key, "1"); } catch (e) { return; }
+    setCelebrate(m);
+  }, [history, currentUser]);
+
   async function activatePromo(code) {
     const { data } = await supabase.from("promo_codes").select("*").ilike("code", code.trim()).maybeSingle();
     if (!data || data.used) {
@@ -1016,7 +1096,7 @@ export default function BilliardPOS() {
     await refreshOwnerData();
   }
   async function addExtra(hallId, tableId, extra) {
-    if (extra.barItemId && currentUser && currentUser.betaAccess) {
+    if (extra.barItemId && currentUser && proOn(currentUser)) {
       const wi = warehouseItems.find((w) => w.barItemId === extra.barItemId);
       if (!wi || wi.units <= 0) {
         showToast(`❌ Skladda "${extra.name}" mavjud emas`);
@@ -1042,7 +1122,7 @@ export default function BilliardPOS() {
       if (!item || item.qty <= 0) continue;
       const barItem = item.barItemId ? bar.find((b) => b.id === item.barItemId) : null;
       const costPrice = barItem ? barItem.costPrice : 0;
-      if (item.barItemId && currentUser && currentUser.betaAccess) {
+      if (item.barItemId && currentUser && proOn(currentUser)) {
         const wi = warehouseItems.find((w) => w.barItemId === item.barItemId);
         if (!wi || wi.units < item.qty) {
           showToast(`❌ Skladda "${item.name}" yetarli emas (${wi ? wi.units : 0} dona bor)`);
@@ -1273,11 +1353,24 @@ export default function BilliardPOS() {
     const { data } = await supabase.from("subscription_plans").select("*").eq("active", true).order("days");
     setPlans((data || []).map(mapPlan));
   }
-  async function addPlan(months, price) {
+  async function addPlan(months, price, tier) {
     const days = Math.round(Number(months) * 30);
     const label = `${months} oylik`;
-    await supabase.from("subscription_plans").insert({ label, months: Number(months), days, price: Number(price) });
+    const r = await supabase.from("subscription_plans").insert({ label, months: Number(months), days, price: Number(price), tier: tier === "basic" ? "basic" : "pro" });
+    if (r.error) showToast(`❌ Xatolik: ${r.error.message}`);
     await fetchPlans();
+  }
+  async function updatePlanPrice(id, price) {
+    const n = Number(String(price).replace(/[^0-9]/g, ""));
+    if (!n) { showToast("❌ Noto'g'ri qiymat"); return; }
+    const r = await supabase.from("subscription_plans").update({ price: n }).eq("id", id);
+    if (r.error) showToast(`❌ Xatolik: ${r.error.message}`); else showToast("✅ Narx yangilandi");
+    await fetchPlans();
+  }
+  async function setUserTier(userId, tier) {
+    const r = await supabase.from("users").update({ plan_tier: tier }).eq("id", userId);
+    if (r.error) showToast(`❌ Xatolik: ${r.error.message}`);
+    await loadAdmin();
   }
   async function deletePlan(id) {
     await supabase.from("subscription_plans").update({ active: false }).eq("id", id);
@@ -1320,6 +1413,17 @@ export default function BilliardPOS() {
       await supabase.from("users").update({ subscribed: true, subscription_until: new Date(newUntil).toISOString() }).eq("id", userId);
     }
     await loadAdmin();
+  }
+  async function addDaysToUser(userId) {
+    const u = users.find((x) => x.id === userId);
+    const choice = window.prompt(`"${u.name}" obunasiga necha kun qo'shilsin? (qolgan kunlarga qo'shiladi)`, "30");
+    if (!choice) return;
+    const days = Number(choice);
+    if (!days || days <= 0) { showToast("❌ Noto'g'ri qiymat kiritildi"); return; }
+    const newUntil = computeNewUntil(u.subscriptionUntil, days);
+    await supabase.from("users").update({ subscribed: true, subscription_until: new Date(newUntil).toISOString() }).eq("id", userId);
+    await loadAdmin();
+    showToast(`✅ Obuna ${fmtDate(newUntil)} gacha uzaytirildi`);
   }
   async function toggleVip(userId) {
     const u = users.find((x) => x.id === userId);
@@ -1483,9 +1587,12 @@ export default function BilliardPOS() {
         </button>
       )}
 
+      {(() => { SUPPORT_UID = currentUser ? currentUser.id : null; return null; })()}
+      {!isAdmin && screen !== "admin" && <PosikHelper screen={screen} hallsCount={halls.length} />}
+      {celebrate && <PosikCelebrate n={celebrate} onClose={() => setCelebrate(null)} />}
       {screen === "auth" && <AuthScreen onRegister={handleRegister} onLogin={handleLogin} />}
       {screen === "banned" && currentUser && <BannedScreen user={currentUser} onLogout={handleLogout} />}
-      {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} plans={plans} trialDays={trialDays} trialEnabled={trialEnabled} onPromo={activatePromo} onFreeTrial={activateFreeTrial} onLogout={handleLogout} />}
+      {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} plans={plans} trialDays={trialDays} trialEnabled={trialEnabled} onPromo={activatePromo} onFreeTrial={activateFreeTrial} onLogout={handleLogout} onBack={canAccess(currentUser) ? () => setScreen("halls") : null} />}
 
       {screen === "halls" && currentUser && (
         <HallsScreen
@@ -1493,7 +1600,7 @@ export default function BilliardPOS() {
           onCreateHall={createHall} onRenameHall={renameHall} onDeleteHall={deleteHall}
           onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem} onUpdateCost={updateMenuItemCost}
           onOpenHall={(id) => { setActiveHallId(id); setScreen("hall"); }}
-          onLogout={handleLogout} onStats={() => setScreen("stats")}
+          onLogout={handleLogout} onStats={() => setScreen("stats")} onExtend={() => setScreen("subscribe")}
           onWarehouse={() => setScreen("warehouse")} onDebts={() => setScreen("debts")}
           onFinance={() => setScreen("finance")} onStaff={() => setScreen("staff")}
           shifts={shifts} onOpenShift={openShift} onCloseShift={closeShift}
@@ -1504,7 +1611,7 @@ export default function BilliardPOS() {
         />
       )}
 
-      {screen === "warehouse" && currentUser && currentUser.betaAccess && (
+      {screen === "warehouse" && currentUser && proOn(currentUser) && (
         <WarehouseScreen
           user={currentUser} bar={bar} warehouseItems={warehouseItems} warehouseLogs={warehouseLogs} shifts={shifts}
           onBack={() => setScreen("halls")}
@@ -1512,7 +1619,7 @@ export default function BilliardPOS() {
         />
       )}
 
-      {screen === "debts" && currentUser && currentUser.betaAccess && (
+      {screen === "debts" && currentUser && proOn(currentUser) && (
         <DebtsScreen
           debts={debts} debtPayments={debtPayments} debtTopups={debtTopups} onBack={() => setScreen("halls")}
           onAddDebt={addDebt} onPayDebt={payDebt} onAddToDebt={addToDebt} onToast={showToast}
@@ -1563,10 +1670,10 @@ export default function BilliardPOS() {
       {screen === "admin" && isAdmin && (
         <AdminScreen
           users={users} promoCodes={promoCodes} chats={chatsByUser} adminAccounts={adminAccounts} openShiftOwners={openShiftOwners}
-          plans={plans} onAddPlan={addPlan} onDeletePlan={deletePlan}
+          plans={plans} onAddPlan={addPlan} onDeletePlan={deletePlan} onUpdatePlanPrice={updatePlanPrice} onSetTier={setUserTier}
           trialDays={trialDays} onSetTrialDays={setTrialDaysConfig}
           trialEnabled={trialEnabled} onSetTrialEnabled={setTrialEnabledConfig}
-          onAddPromo={addPromo} onToggleSub={toggleUserSub} onToggleVip={toggleVip} onToggleBetaAccess={toggleBetaAccess}
+          onAddPromo={addPromo} onToggleSub={toggleUserSub} onAddDays={addDaysToUser} onToggleVip={toggleVip} onToggleBetaAccess={toggleBetaAccess}
           onBan={banUser} onUnban={unbanUser} onAddAdmin={addAdmin} onAddUser={addUserDirect}
           onDeleteAdmin={deleteAdmin} onDeleteUser={deleteUser} onChangePassword={changeAdminPassword}
           isSuperAdmin={(adminLogin || "").toLowerCase() === "asliddin"}
@@ -1625,11 +1732,153 @@ function LangSwitch() {
 }
 function SupportLink() {
   return (
-    <a href={ADMIN_URL} target="_blank" rel="noopener noreferrer"
+    <a href={supportUrl()} target="_blank" rel="noopener noreferrer"
       style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}`, color: CREAM }}
       className="w-full px-4 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
-      <MessageCircle size={16} style={{ color: GOLD }} /> Adminga yozish
+      <img src="/posik/avatar.webp" alt="" className="w-6 h-6 rounded-full" style={{ background: "#e9f6ef" }} /> Adminga yozish
     </a>
+  );
+}
+
+function ProModal({ onClose, onUpgrade }) {
+  return (
+    <Modal onClose={onClose}>
+      <div className="text-center">
+        <img src="/posik/point.webp" alt="Posik" className="mx-auto mb-2" style={{ height: 150 }} />
+        <h2 className="font-display text-lg font-bold mb-1" style={{ color: GOLD }}>Bu imkoniyat ⭐ Pro tarifda</h2>
+        <p className="text-xs mb-3" style={{ color: "#b8c9bf" }}>Pro tarifga o'tsangiz, hammasi ochiladi:</p>
+      </div>
+      <ul className="mb-4 space-y-1.5">
+        {TIER_FEATURES.pro.map((f) => (
+          <li key={f} className="text-sm flex items-center gap-2" style={{ color: CREAM }}><Check size={14} style={{ color: GOLD }} /> {f}</li>
+        ))}
+      </ul>
+      <button onClick={onUpgrade} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm font-display">Pro tarifga o'tish</button>
+      <button onClick={onClose} className="w-full mt-2 py-2 text-xs" style={{ color: "#8fa398" }}>Keyinroq</button>
+    </Modal>
+  );
+}
+
+function TelegramReportLink({ user }) {
+  const pro = isPro(user);
+  async function connect() {
+    const ABC = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const tok = Array.from(crypto.getRandomValues(new Uint8Array(24))).map((b) => ABC[b % 62]).join("");
+    const w = window.open("", "_blank");
+    const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(tok));
+    const hash = Array.from(new Uint8Array(dig)).map((x) => x.toString(16).padStart(2, "0")).join("");
+    const r = await supabase.from("users").update({ tg_link_token: hash, tg_link_expires: new Date(Date.now() + 30 * 60000).toISOString() }).eq("id", user.id);
+    if (r.error) { if (w) w.close(); alert(`Xatolik: ${r.error.message}`); return; }
+    const url = `${BOT_URL}?start=link_${tok}`;
+    if (w) w.location.href = url; else window.location.href = url;
+  }
+  return (
+    <button onClick={connect} style={{ background: FELT_DARK, border: `1px solid ${pro ? GOLD : FELT_LIGHT}` }}
+      className="w-full px-4 py-3 rounded-xl flex items-center gap-3 text-left">
+      <img src="/posik/avatar.webp" alt="" className="w-8 h-8 rounded-full" style={{ background: "#e9f6ef" }} />
+      <div className="flex-1">
+        <div className="text-sm font-medium" style={{ color: CREAM }}>
+          {user.telegramVerified ? "Telegram ulangan ✅" : "Telegram'da kunlik hisobot"}
+        </div>
+        <div className="text-xs" style={{ color: "#8fa398" }}>
+          {pro ? "Posik har kuni ertalab 09:00 da kechagi kun hisobotini yuboradi" : "⭐ Pro tarifda ishlaydi"}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+const POSIK_TIPS = [
+  "Stolni yopishdan oldin barni qo'shishni unutmang — hammasi bitta chekda chiqadi!",
+  "Mijoz kutib tursa, Pauza bosing — vaqt to'xtaydi, pul ham ortiqcha yozilmaydi.",
+  "Smenani ochib-yopsangiz, kim qancha ishlaganini aniq bilasiz.",
+  "Statistikada qaysi soatlarda klub to'la bo'lishini ko'rasiz 📊",
+  "Qarz daftariga yozib qo'ysangiz, hech kim, hech narsa unutilmaydi 📒",
+  "Skladni to'ldirib qo'ying — bar sotilganda zaxira o'zi kamayadi.",
+  "Xodim qo'shsangiz, kim stol ochib-yopganini ko'rib turasiz.",
+  "Savolingiz bormi? Menga bosing — admin bilan bog'layman! 💜",
+  "Ilovani telefonga o'rnatib olsangiz, bir bosishda ochiladi 📲",
+  "Obuna tugashidan oldin uzaytirsangiz, qolgan kunlar kuyib ketmaydi — ustiga qo'shiladi.",
+];
+const POSIK_AUTH_TIPS = [
+  "Salom! Men Posik 💜 Savolingiz bo'lsa, menga bosing!",
+  "Ro'yxatdan o'tsangiz, 3 kun tekin sinab ko'rasiz 😉",
+  "Parolni unutdingizmi? Menga bosing — admin yordam beradi.",
+];
+const POSIK_SPOTS = [
+  { side: "right", bottom: 110 }, { side: "left", bottom: 110 }, { side: "right", bottom: 300 }, { side: "left", bottom: 260 },
+];
+
+function PosikHelper({ screen, hallsCount }) {
+  const [show, setShow] = useState(false);
+  const [tip, setTip] = useState("");
+  const [spot, setSpot] = useState(POSIK_SPOTS[0]);
+  const [img, setImg] = useState("wave");
+  const [muted, setMuted] = useState(() => { try { return Number(localStorage.getItem("posik-mute-until") || 0) > Date.now(); } catch (e) { return false; } });
+  const visibleOn = ["auth", "halls", "hall", "stats", "subscribe", "warehouse", "debts", "finance", "staff"].includes(screen);
+  useEffect(() => {
+    if (muted || !visibleOn) { setShow(false); return; }
+    let alive = true; let t1, t2;
+    const pick = () => {
+      let list = screen === "auth" ? POSIK_AUTH_TIPS : POSIK_TIPS;
+      if (screen === "halls" && hallsCount === 0) list = ["Keling, birinchi zalingizni qo'shamiz — pastdagi tugmani bosing! 🎱"];
+      setTip(list[Math.floor(Math.random() * list.length)]);
+      setSpot(POSIK_SPOTS[Math.floor(Math.random() * POSIK_SPOTS.length)]);
+      setImg(Math.random() < 0.5 ? "wave" : "point");
+    };
+    const schedule = (delay) => {
+      t1 = setTimeout(() => {
+        if (!alive) return;
+        pick(); setShow(true);
+        t2 = setTimeout(() => { setShow(false); schedule(150000 + Math.random() * 150000); }, 9000);
+      }, delay);
+    };
+    schedule(screen === "auth" ? 5000 : 30000);
+    return () => { alive = false; clearTimeout(t1); clearTimeout(t2); };
+  }, [screen, muted, hallsCount, visibleOn]);
+  if (!visibleOn || muted) return null;
+  const left = spot.side === "left";
+  const flip = left && img === "point";
+  return (
+    <div style={{ position: "fixed", zIndex: 45, bottom: `calc(var(--safe-bottom, 0px) + ${spot.bottom}px)`, [spot.side]: 0,
+      transform: show ? "translateX(0)" : `translateX(${left ? "-115%" : "115%"})`, transition: "transform 0.6s cubic-bezier(.34,1.56,.64,1)",
+      display: "flex", flexDirection: left ? "row" : "row-reverse", alignItems: "flex-end", pointerEvents: show ? "auto" : "none" }}>
+      <button onClick={() => window.open(supportUrl(), "_blank")} aria-label="Posik — yordam" style={{ background: "transparent", border: "none", padding: 0 }}>
+        <img src={`/posik/${img}.webp`} alt="Posik" style={{ height: 120, display: "block", transform: flip ? "scaleX(-1)" : "none", filter: "drop-shadow(0 6px 10px rgba(0,0,0,0.35))", animation: show ? "posikBob 1.6s ease-in-out infinite" : "none" }} />
+      </button>
+      <div onClick={() => window.open(supportUrl(), "_blank")} className="rounded-2xl px-3 py-2 text-xs mb-16 cursor-pointer"
+        style={{ background: "#fff", color: "#3b285c", maxWidth: 190, boxShadow: "0 6px 18px rgba(0,0,0,0.3)", position: "relative", [left ? "marginLeft" : "marginRight"]: -6 }}>
+        <button onClick={(e) => { e.stopPropagation(); setShow(false); setMuted(true); try { localStorage.setItem("posik-mute-until", String(Date.now() + 30 * 60000)); } catch (er) {} }}
+          style={{ position: "absolute", top: -8, [left ? "right" : "left"]: -8, width: 20, height: 20, borderRadius: 10, background: "#3b285c", color: "#fff", fontSize: 11, lineHeight: "20px", border: "none" }}>✕</button>
+        <div className="font-semibold mb-0.5" style={{ color: "#6e46b4" }}>Posik</div>
+        {tip}
+      </div>
+      <style>{`@keyframes posikBob{0%,100%{transform:translateY(0) ${flip ? "scaleX(-1)" : ""}}50%{transform:translateY(-6px) ${flip ? "scaleX(-1)" : ""}}}`}</style>
+    </div>
+  );
+}
+
+function PosikCelebrate({ n, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 8000); return () => clearTimeout(t); }, []);
+  const pieces = Array.from({ length: 48 }, (_, i) => i);
+  const cols = ["#ff5a78", "#ffcd3c", "#5ac8a0", "#6ea0ff", "#be78ff"];
+  const texts = { 25: "Bugun allaqachon 25 ta stol yopildi! Ish qizib ketdi 🔥", 50: "Bugun 50 ta stol yopildi! Zo'r kun bo'lyapti! 💪", 100: "Bugun 100 ta stol!!! Siz haqiqiy chempionsiz! 🏆", 150: "150 ta stol! Rekord kun! 🚀", 200: "200 ta stol! Afsonaviy kun! 👑" };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(6,20,15,0.72)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+      {pieces.map((i) => (
+        <span key={i} style={{ position: "absolute", top: -20, left: `${(i * 37) % 100}%`, width: 10, height: 6, background: cols[i % 5], borderRadius: 2,
+          animation: `posikConf ${2.2 + (i % 7) * 0.35}s linear ${(i % 9) * 0.12}s infinite` }} />
+      ))}
+      <div onClick={(e) => e.stopPropagation()} className="text-center px-6" style={{ animation: "posikPop .5s cubic-bezier(.34,1.56,.64,1)" }}>
+        <img src="/posik/happy.webp" alt="Posik" className="mx-auto" style={{ height: 220, animation: "posikJump 0.9s ease-in-out infinite" }} />
+        <div className="font-display text-3xl font-bold mt-2" style={{ color: GOLD }}>Tabriklayman! 🎉</div>
+        <div className="text-base mt-2 mb-5" style={{ color: CREAM }}>{texts[n] || `Bugun ${n} ta stol yopildi!`}</div>
+        <button onClick={onClose} style={{ background: GOLD, color: FELT_DARK }} className="px-6 py-3 rounded-xl font-semibold text-sm">Rahmat, Posik! 💜</button>
+      </div>
+      <style>{`@keyframes posikConf{0%{transform:translateY(0) rotate(0)}100%{transform:translateY(110vh) rotate(720deg)}}
+@keyframes posikPop{0%{transform:scale(.3);opacity:0}100%{transform:scale(1);opacity:1}}
+@keyframes posikJump{0%,100%{transform:translateY(0)}50%{transform:translateY(-18px)}}`}</style>
+    </div>
   );
 }
 
@@ -1738,8 +1987,10 @@ function BannedScreen({ user, onLogout }) {
 }
 
 // ---------------- SUBSCRIBE ----------------
-function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFreeTrial, onLogout }) {
+function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFreeTrial, onLogout, onBack }) {
   const [code, setCode] = useState("");
+  const active = !!(user.subscriptionUntil && user.subscriptionUntil > Date.now());
+  const left = active ? subDaysLeft(user.subscriptionUntil) : 0;
   const BOT = "https://t.me/Billiard_pos_bot";
   return (
     <div className="min-h-screen flex items-center justify-center px-5 py-10">
@@ -1751,32 +2002,59 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
             <button onClick={onLogout} className="text-xs opacity-60 flex items-center gap-1" style={{ color: CREAM }}><LogOut size={13} /> Chiqish</button>
           </div>
         </div>
-        <div className="text-xs mb-3 px-3 py-1.5 rounded-full inline-block" style={{ background: "rgba(178,58,58,0.15)", color: "#e88" }}>
-          Davom etish uchun obuna kerak
-        </div>
+        {onBack && (
+          <button onClick={onBack} className="text-xs mb-3 flex items-center gap-1" style={{ color: "#b8c9bf" }}>← Orqaga</button>
+        )}
+        {active ? (
+          <div className="rounded-2xl p-4 mb-4" style={{ background: "rgba(123,191,106,0.10)", border: "1px solid #7bbf6a" }}>
+            <div className="text-xs mb-1" style={{ color: "#8fa398" }}>Joriy obuna</div>
+            <div className="text-sm font-semibold" style={{ color: CREAM }}>{`${fmtDate(user.subscriptionUntil)} gacha`}<span style={{ color: "#7bbf6a" }}>{` · ${left} kun qoldi`}</span></div>
+            <div className="text-[11px] mt-2" style={{ color: "#8fa398" }}>Yangi obuna qolgan kunlarga qo'shiladi. Masalan: 15 kun qolgan + 30 kun = 45 kun.</div>
+          </div>
+        ) : (
+          <div className="text-xs mb-3 px-3 py-1.5 rounded-full inline-block" style={{ background: "rgba(178,58,58,0.15)", color: "#e88" }}>
+            Davom etish uchun obuna kerak
+          </div>
+        )}
 
         {plans.length === 0 && (
           <p className="text-sm mb-4" style={{ color: "#8fa398" }}>Hozircha tariflar sozlanmagan. Birozdan so'ng qayta urinib ko'ring.</p>
         )}
-        {plans.map((p, i) => {
-          const cheapest = plans.length > 1 && p.price === Math.min(...plans.map((x) => x.price));
-          const bestValue = plans.length > 1 && p === plans[plans.length - 1];
+        {["basic", "pro"].map((tier) => {
+          const ps = plans.filter((p) => p.tier === tier);
+          if (!ps.length) return null;
+          const pro = tier === "pro";
           return (
-            <div key={p.id} style={{ background: FELT, border: `1px solid ${bestValue ? GOLD : FELT_LIGHT}` }} className="rounded-2xl p-6 mb-3 relative">
-              {bestValue && <span className="absolute -top-2.5 right-4 text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: GOLD, color: FELT_DARK }}>TEJAMLI</span>}
-              <div className="flex items-baseline gap-2 mb-1">
-                <span className="font-display text-2xl font-bold" style={{ color: GOLD }}>{fmtMoney(p.price)}</span>
+            <div key={tier} className="rounded-2xl p-4 mb-4" style={{ background: pro ? "rgba(201,162,39,0.08)" : "rgba(123,191,106,0.06)", border: `1px solid ${pro ? GOLD : FELT_LIGHT}` }}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-display text-lg font-bold" style={{ color: pro ? GOLD : "#7bbf6a" }}>{pro ? "⭐ Pro" : "🟢 Oddiy"}</span>
+                {pro && <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: GOLD, color: FELT_DARK }}>TAVSIYA</span>}
               </div>
-              <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>{p.label} obuna</p>
-              <a href={`${BOT}?start=${p.id}`} target="_blank" rel="noopener noreferrer"
-                style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm font-display block text-center">
-                To'lov qilish
-              </a>
+              <ul className="mb-3 space-y-1">
+                {TIER_FEATURES[tier].map((f) => (
+                  <li key={f} className="text-xs flex items-center gap-1.5" style={{ color: "#b8c9bf" }}><Check size={12} style={{ color: pro ? GOLD : "#7bbf6a" }} /> {f}</li>
+                ))}
+              </ul>
+              {ps.map((p) => (
+                <div key={p.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-2">
+                  <div className="flex items-baseline justify-between gap-2 mb-1">
+                    <span className="text-sm" style={{ color: "#b8c9bf" }}>{p.label} obuna</span>
+                    <span className="font-display text-xl font-bold" style={{ color: GOLD }}>{fmtMoney(p.price)}</span>
+                  </div>
+                  {p.days > 0 && (
+                    <p className="text-[11px] mb-3" style={{ color: "#8fa398" }}>{`Yangi tugash sanasi: ${fmtDate(computeNewUntil(user.subscriptionUntil, p.days))}`}</p>
+                  )}
+                  <a href={`${BOT}?start=${p.id}`} target="_blank" rel="noopener noreferrer"
+                    style={{ background: pro ? GOLD : FELT_DARK, color: pro ? FELT_DARK : CREAM, border: pro ? "none" : `1px solid ${FELT_LIGHT}` }} className="w-full py-2.5 rounded-xl font-semibold text-sm font-display block text-center">
+                    To'lov qilish
+                  </a>
+                </div>
+              ))}
             </div>
           );
         })}
 
-        {trialEnabled && !user.trialUsed && (
+        {trialEnabled && !user.trialUsed && !active && (
           <button onClick={onFreeTrial}
             style={{ background: "transparent", border: `1px dashed ${GOLD}`, color: GOLD }} className="w-full py-3 rounded-xl font-semibold text-sm mb-3">
             🎁 Tekinga {trialDays} kun ishlatish
@@ -1803,7 +2081,9 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword }) {
+function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onExtend, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword }) {
+  const [proModal, setProModal] = useState(false);
+  const pro = isPro(user);
   const [tab, setTab] = useState("halls");
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -1856,12 +2136,22 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
       </div>
       <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
 
-      {user.role === "owner" && user.accountType !== "vip" && user.subscriptionUntil && user.subscriptionUntil > Date.now() && user.subscriptionUntil - Date.now() < 3 * 86400000 && (
-        <div style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}` }} className="rounded-xl p-3 mb-4 flex items-center gap-2">
-          <Bell size={14} style={{ color: GOLD }} />
-          <span className="text-xs" style={{ color: CREAM }}>Obunangiz {Math.ceil((user.subscriptionUntil - Date.now()) / 86400000)} kundan keyin tugaydi</span>
-        </div>
-      )}
+      {user.role === "owner" && user.accountType !== "vip" && user.subscriptionUntil && (() => {
+        const dl = subDaysLeft(user.subscriptionUntil);
+        const warn = dl <= 7;
+        return (
+          <div style={{ background: warn ? "rgba(201,162,39,0.12)" : FELT, border: `1px solid ${warn ? GOLD : FELT_LIGHT}` }} className="rounded-xl p-3 mb-4 flex items-center gap-2">
+            {warn && <Bell size={14} style={{ color: GOLD }} />}
+            <div className="flex-1 min-w-0">
+              <div className="text-xs" style={{ color: CREAM }}>{`${warn ? "Obuna tez orada tugaydi" : "Obuna faol"}: ${dl} kun qoldi`}</div>
+              <div className="text-[11px]" style={{ color: "#8fa398" }}>{`${fmtDate(user.subscriptionUntil)} gacha`}</div>
+            </div>
+            {onExtend && (
+              <button onClick={onExtend} className="text-xs px-3 py-1.5 rounded-lg font-semibold whitespace-nowrap" style={{ background: GOLD, color: FELT_DARK }}>Uzaytirish</button>
+            )}
+          </div>
+        );
+      })()}
 
       {(() => {
         const openShiftObj = (shifts || []).find((s) => s.status === "open");
@@ -1914,25 +2204,26 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
 
       {user.role === "owner" && (
         <div className="grid grid-cols-2 gap-3 mb-4">
-          <button onClick={onFinance} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
-            <TrendingUp size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Moliya</span>
+          <button onClick={pro ? onFinance : () => setProModal(true)} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, opacity: pro ? 1 : 0.75 }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <TrendingUp size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Moliya</span>{!pro && <span className="text-xs">🔒</span>}
           </button>
-          <button onClick={onStaff} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
-            <Users size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Xodimlar</span>
+          <button onClick={pro ? onStaff : () => setProModal(true)} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, opacity: pro ? 1 : 0.75 }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <Users size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Xodimlar</span>{!pro && <span className="text-xs">🔒</span>}
           </button>
         </div>
       )}
 
-      {user.betaAccess && (
+      {(user.betaAccess || user.role === "owner") && (
         <div className="grid grid-cols-2 gap-3 mb-4">
-          <button onClick={onWarehouse} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
-            <Boxes size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Sklad</span>
+          <button onClick={proOn(user) ? onWarehouse : () => setProModal(true)} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, opacity: proOn(user) ? 1 : 0.75 }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <Boxes size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Sklad</span>{!proOn(user) && <span className="text-xs">🔒</span>}
           </button>
-          <button onClick={onDebts} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
-            <Wallet size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Qarz daftari</span>
+          <button onClick={proOn(user) ? onDebts : () => setProModal(true)} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, opacity: proOn(user) ? 1 : 0.75 }} className="py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+            <Wallet size={16} style={{ color: GOLD }} /> <span style={{ color: CREAM }}>Qarz daftari</span>{!proOn(user) && <span className="text-xs">🔒</span>}
           </button>
         </div>
       )}
+      {proModal && <ProModal onClose={() => setProModal(false)} onUpgrade={() => { setProModal(false); onExtend && onExtend(); }} />}
 
       {isNewUser && (
         <button onClick={openGuide} style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}` }}
@@ -1981,6 +2272,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
             className="w-full mt-3 py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2" style={{ background: FELT_DARK, color: "#ff8a8a", border: "1px solid #b23a3a" }}>
             <LogOut size={15} /> Chiqish
           </button>
+          {user.role === "owner" && <div className="mt-3"><TelegramReportLink user={user} /></div>}
           <div className="mt-3"><SupportLink /></div>
           <div className="flex items-center justify-between mt-4">
             <span className="text-xs" style={{ color: "#8fa398" }}>Til</span>
@@ -3643,7 +3935,8 @@ function SupportScreen({ messages, onSend, onBack }) {
 }
 
 // ---------------- ADMIN ----------------
-function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners, plans, onAddPlan, onDeletePlan, trialDays, onSetTrialDays, trialEnabled, onSetTrialEnabled, onAddPromo, onToggleSub, onToggleVip, onToggleBetaAccess, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
+function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners, plans, onAddPlan, onDeletePlan, onUpdatePlanPrice, onSetTier, trialDays, onSetTrialDays, trialEnabled, onSetTrialEnabled, onAddPromo, onToggleSub, onAddDays, onToggleVip, onToggleBetaAccess, onBan, onUnban, onAddAdmin, onAddUser, onDeleteAdmin, onDeleteUser, onChangePassword, isSuperAdmin, onSendMessage, onOpenChat, adminUnreadUserCount, onLogout, viewUserBasic, viewUserContent, viewUserLoading, onViewUser, onCloseView }) {
+  const [planTier, setPlanTier] = useState("basic");
   const [tab, setTab] = useState("stats");
   const [code, setCode] = useState("");
   const [promoDays, setPromoDays] = useState("");
@@ -3738,6 +4031,10 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                     <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: u.subscribed || u.accountType === "vip" ? "rgba(201,162,39,0.15)" : "rgba(178,58,58,0.15)", color: u.subscribed || u.accountType === "vip" ? GOLD : "#e88" }}>
                       {u.accountType === "vip" ? "VIP" : u.subscribed ? "obuna faol" : "obunasiz"}
                     </span>
+                    {u.accountType !== "vip" && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: isPro(u) ? "rgba(201,162,39,0.15)" : "rgba(123,191,106,0.15)", color: isPro(u) ? GOLD : "#7bbf6a" }}>{isPro(u) ? "⭐ Pro" : "🟢 Oddiy"}</span>
+                    )}
+                    {u.telegramVerified && <span title="Telegram ulangan" className="text-[10px]">📲</span>}
                     <button onClick={() => { setChatUser(u); onOpenChat(u.id); }} className="relative">
                       <MessageCircle size={16} style={{ color: "#b8c9bf" }} />
                       {unread && <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full" style={{ background: RED }} />}
@@ -3776,6 +4073,14 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                   <button onClick={() => onToggleSub(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
                     {u.subscribed && (!u.subscriptionUntil || u.subscriptionUntil > Date.now()) ? "Obunani o'chirish" : "Obuna berish"}
                   </button>
+                  {u.subscribed && u.subscriptionUntil && u.subscriptionUntil > Date.now() && (
+                    <button onClick={() => onAddDays(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: GOLD, border: `1px solid ${GOLD}` }}>+ Kun qo'shish</button>
+                  )}
+                  {u.accountType !== "vip" && (
+                    <button onClick={() => onSetTier(u.id, isPro(u) ? "basic" : "pro")} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: isPro(u) ? "#7bbf6a" : GOLD, border: `1px solid ${FELT_LIGHT}` }}>
+                      {isPro(u) ? "🟢 Oddiyga o'tkazish" : "⭐ Pro qilish"}
+                    </button>
+                  )}
                   <button onClick={() => onToggleVip(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
                     {u.accountType === "vip" ? "Oddiyga o'tkazish" : "VIP qilish"}
                   </button>
@@ -3833,8 +4138,15 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                     className="w-full px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
                 </div>
               </div>
+              <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Tarif turi</div>
+              <div className="flex gap-2 mb-3">
+                {[["basic", "🟢 Oddiy"], ["pro", "⭐ Pro"]].map(([k, l]) => (
+                  <button key={k} onClick={() => setPlanTier(k)} className="flex-1 py-2 rounded-lg text-sm font-semibold"
+                    style={{ background: planTier === k ? GOLD : FELT_DARK, color: planTier === k ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>{l}</button>
+                ))}
+              </div>
               <button disabled={!planMonths || !planPrice}
-                onClick={() => { onAddPlan(planMonths, planPrice); setPlanMonths(""); setPlanPrice(""); }}
+                onClick={() => { onAddPlan(planMonths, planPrice, planTier); setPlanMonths(""); setPlanPrice(""); }}
                 style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">Qo'shish</button>
             </div>
           ) : (
@@ -3845,13 +4157,21 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
             {plans.map((p) => (
               <div key={p.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="flex items-center justify-between px-4 py-3 rounded-xl">
                 <div>
-                  <div className="text-sm font-medium" style={{ color: CREAM }}>{p.label}</div>
+                  <div className="text-sm font-medium flex items-center gap-2" style={{ color: CREAM }}>
+                    {p.label}
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: p.tier === "pro" ? "rgba(201,162,39,0.18)" : "rgba(123,191,106,0.18)", color: p.tier === "pro" ? GOLD : "#7bbf6a" }}>{p.tier === "pro" ? "⭐ Pro" : "🟢 Oddiy"}</span>
+                  </div>
                   <div className="text-xs font-mono" style={{ color: GOLD }}>{fmtMoney(p.price)}</div>
                 </div>
                 {isSuperAdmin && (
-                  <button onClick={() => { if (confirm(`"${p.label}" tarifini o'chirasizmi?`)) onDeletePlan(p.id); }}>
-                    <Trash2 size={15} style={{ color: RED }} />
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button title="Narxni o'zgartirish" onClick={() => { const v = window.prompt(`"${p.label}" uchun yangi narx (so'm):`, String(p.price)); if (v) onUpdatePlanPrice(p.id, v); }}>
+                      <Pencil size={15} style={{ color: GOLD }} />
+                    </button>
+                    <button onClick={() => { if (confirm(`"${p.label}" tarifini o'chirasizmi?`)) onDeletePlan(p.id); }}>
+                      <Trash2 size={15} style={{ color: RED }} />
+                    </button>
+                  </div>
                 )}
               </div>
             ))}
