@@ -41,6 +41,10 @@ const TIER_FEATURES = {
 let CUR_LANG = "uz";
 try { CUR_LANG = localStorage.getItem(LANG_KEY) === "ru" ? "ru" : "uz"; } catch (e) {}
 const RU_DICT = {
+"Posik yordamchi": "Помощник Посик",
+"Maslahatlar va tabriklar": "Подсказки и поздравления",
+"💜 Posik yoqildi": "💜 Посик включён",
+"Posik o'chirildi": "Посик выключен",
 "Bu imkoniyat ⭐ Pro tarifda": "Эта функция в тарифе ⭐ Pro",
 "Pro tarifga o'tsangiz, hammasi ochiladi:": "Перейдите на Pro — откроется всё:",
 "Pro tarifga o'tish": "Перейти на Pro",
@@ -61,7 +65,6 @@ const RU_DICT = {
 "TAVSIYA": "РЕКОМЕНДУЕМ",
 "Tabriklayman! 🎉": "Поздравляю! 🎉",
 "Rahmat, Posik! 💜": "Спасибо, Посик! 💜",
-"Bugun allaqachon 25 ta stol yopildi! Ish qizib ketdi 🔥": "Сегодня уже закрыто 25 столов! Работа кипит 🔥",
 "Bugun 50 ta stol yopildi! Zo'r kun bo'lyapti! 💪": "Сегодня закрыто 50 столов! Отличный день! 💪",
 "Bugun 100 ta stol!!! Siz haqiqiy chempionsiz! 🏆": "Сегодня 100 столов!!! Вы настоящий чемпион! 🏆",
 "150 ta stol! Rekord kun! 🚀": "150 столов! Рекордный день! 🚀",
@@ -78,7 +81,8 @@ const RU_DICT = {
 "Obuna tugashidan oldin uzaytirsangiz, qolgan kunlar kuyib ketmaydi — ustiga qo'shiladi.": "Продлите подписку заранее — оставшиеся дни не сгорят, а добавятся.",
 "Salom! Men Posik 💜 Savolingiz bo'lsa, menga bosing!": "Привет! Я Посик 💜 Есть вопрос — нажмите на меня!",
 "Ro'yxatdan o'tsangiz, 3 kun tekin sinab ko'rasiz 😉": "Зарегистрируйтесь — 3 дня бесплатно 😉",
-"Parolni unutdingizmi? Menga bosing — admin yordam beradi.": "Забыли пароль? Нажмите на меня — админ поможет.",
+"Parolni unutdingizmi? Menga bosing — tiklab beramiz! 🔑": "Забыли пароль? Нажмите на меня — восстановим! 🔑",
+"Parolni unutdingizmi?": "Забыли пароль?",
 "Keling, birinchi zalingizni qo'shamiz — pastdagi tugmani bosing! 🎱": "Давайте добавим первый зал — нажмите кнопку ниже! 🎱",
 "Posik": "Посик",
 "Narxni o'zgartirish": "Изменить цену",
@@ -587,7 +591,7 @@ function mapUser(row) {
     subscriptionUntil: row.subscription_until ? new Date(row.subscription_until).getTime() : null,
     role: row.role || "owner", parentOwnerId: row.parent_owner_id || null,
     trialUsed: !!row.trial_used,
-    planTier: row.plan_tier || null, telegramVerified: !!row.telegram_verified,
+    planTier: row.plan_tier || null, telegramVerified: !!row.telegram_verified, posikEnabled: row.posik_enabled !== false,
   };
 }
 function ownerIdOf(u) { return u && u.role === "staff" && u.parentOwnerId ? u.parentOwnerId : (u ? u.id : null); }
@@ -831,7 +835,7 @@ export default function BilliardPOS() {
               } else {
                 const u = mapUser(data);
                 const accessUser = await resolveAccessUser(u);
-                setCurrentUser(u.role === "staff" ? { ...u, betaAccess: accessUser.betaAccess } : u);
+                setCurrentUser(u.role === "staff" ? { ...u, betaAccess: accessUser.betaAccess, planTier: accessUser.planTier, accountType: accessUser.accountType } : u);
                 setSessionToken(s.token || null);
                 if (isBanned(accessUser)) { setScreen("banned"); }
                 else {
@@ -984,7 +988,7 @@ export default function BilliardPOS() {
     await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     persistSession({ userId: u.id, isAdmin: false, token });
     const accessUser = await resolveAccessUser(u);
-    if (u.role === "staff") setCurrentUser({ ...u, betaAccess: accessUser.betaAccess });
+    if (u.role === "staff") setCurrentUser({ ...u, betaAccess: accessUser.betaAccess, planTier: accessUser.planTier, accountType: accessUser.accountType });
     if (isBanned(accessUser)) { setScreen("banned"); return; }
     const od = await fetchOwnerData(ownerIdOf(u));
     setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
@@ -1000,11 +1004,11 @@ export default function BilliardPOS() {
   }
 
   useEffect(() => {
-    if (!currentUser || !history || !history.length) return;
+    if (!currentUser || currentUser.posikEnabled === false || !history || !history.length) return;
     const now = new Date(); const start = new Date(now); start.setHours(8, 0, 0, 0);
     if (now < start) start.setDate(start.getDate() - 1);
     const n = history.filter((h) => h.endTime >= start.getTime()).length;
-    const reached = [25, 50, 100, 150, 200].filter((m) => n >= m);
+    const reached = [50, 100, 150, 200].filter((m) => n >= m);
     if (!reached.length) return;
     const m = reached[reached.length - 1];
     const key = `posik-cel-${ownerIdOf(currentUser)}-${start.getFullYear()}-${start.getMonth() + 1}-${start.getDate()}-${m}`;
@@ -1465,6 +1469,14 @@ export default function BilliardPOS() {
     await supabase.from("users").delete().eq("id", userId);
     await loadAdmin();
   }
+  async function togglePosik() {
+    if (!currentUser) return;
+    const next = currentUser.posikEnabled === false;
+    setCurrentUser((u) => ({ ...u, posikEnabled: next }));
+    const r = await supabase.from("users").update({ posik_enabled: next }).eq("id", currentUser.id);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); setCurrentUser((u) => ({ ...u, posikEnabled: !next })); return; }
+    showToast(next ? "💜 Posik yoqildi" : "Posik o'chirildi");
+  }
   async function changeOwnPassword(oldPass, newPass) {
     if (newPass.length < 8) { showToast("Yangi parol kamida 8 belgi bo'lishi kerak"); return; }
     const { data, error } = await supabase.rpc("change_user_password", { p_user_id: currentUser.id, p_old_password: oldPass, p_new_password: newPass });
@@ -1595,7 +1607,7 @@ export default function BilliardPOS() {
       )}
 
       {(() => { SUPPORT_UID = currentUser ? currentUser.id : null; return null; })()}
-      {!isAdmin && screen !== "admin" && <PosikHelper screen={screen} hallsCount={halls.length} />}
+      {!isAdmin && screen !== "admin" && (!currentUser || currentUser.posikEnabled !== false) && <PosikHelper screen={screen} hallsCount={halls.length} />}
       {celebrate && <PosikCelebrate n={celebrate} onClose={() => setCelebrate(null)} />}
       {screen === "auth" && <AuthScreen onRegister={handleRegister} onLogin={handleLogin} />}
       {screen === "banned" && currentUser && <BannedScreen user={currentUser} onLogout={handleLogout} />}
@@ -1614,7 +1626,7 @@ export default function BilliardPOS() {
           history={history} warehouseLogs={warehouseLogs}
           staffList={staffList} staffSalaries={staffSalaries} salaryPayments={salaryPayments} onMarkSalaryPaid={markSalaryPaid}
           onSupport={() => { markReadByUser(); setScreen("support"); }}
-          unreadCount={userUnreadCount} onChangePassword={changeOwnPassword}
+          unreadCount={userUnreadCount} onChangePassword={changeOwnPassword} onTogglePosik={togglePosik}
         />
       )}
 
@@ -1747,11 +1759,11 @@ function SupportLink() {
   );
 }
 
-function ProModal({ onClose, onUpgrade }) {
+function ProModal({ onClose, onUpgrade, posik = true }) {
   return (
     <Modal onClose={onClose}>
       <div className="text-center">
-        <img src={POSIK_IMG.point} alt="Posik" className="mx-auto mb-2" style={{ height: 150 }} />
+        {posik && <img src={POSIK_IMG.point} alt="Posik" className="mx-auto mb-2" style={{ height: 150 }} />}
         <h2 className="font-display text-lg font-bold mb-1" style={{ color: GOLD }}>Bu imkoniyat ⭐ Pro tarifda</h2>
         <p className="text-xs mb-3" style={{ color: "#b8c9bf" }}>Pro tarifga o'tsangiz, hammasi ochiladi:</p>
       </div>
@@ -1810,7 +1822,7 @@ const POSIK_TIPS = [
 const POSIK_AUTH_TIPS = [
   "Salom! Men Posik 💜 Savolingiz bo'lsa, menga bosing!",
   "Ro'yxatdan o'tsangiz, 3 kun tekin sinab ko'rasiz 😉",
-  "Parolni unutdingizmi? Menga bosing — admin yordam beradi.",
+  "Parolni unutdingizmi? Menga bosing — tiklab beramiz! 🔑",
 ];
 const POSIK_SPOTS = [
   { side: "right", bottom: 110 }, { side: "left", bottom: 110 }, { side: "right", bottom: 300 }, { side: "left", bottom: 260 },
@@ -1850,10 +1862,10 @@ function PosikHelper({ screen, hallsCount }) {
     <div style={{ position: "fixed", zIndex: 45, bottom: `calc(var(--safe-bottom, 0px) + ${spot.bottom}px)`, [spot.side]: 0,
       transform: show ? "translateX(0)" : `translateX(${left ? "-115%" : "115%"})`, transition: "transform 0.6s cubic-bezier(.34,1.56,.64,1)",
       display: "flex", flexDirection: left ? "row" : "row-reverse", alignItems: "flex-end", pointerEvents: show ? "auto" : "none" }}>
-      <button onClick={() => window.open(supportUrl(), "_blank")} aria-label="Posik — yordam" style={{ background: "transparent", border: "none", padding: 0 }}>
+      <button onClick={() => window.open(tip.startsWith("Parolni unutdingizmi") ? `${BOT_URL}?start=forgot` : supportUrl(), "_blank")} aria-label="Posik — yordam" style={{ background: "transparent", border: "none", padding: 0 }}>
         <img src={POSIK_IMG[img]} alt="Posik" style={{ height: 120, display: "block", transform: flip ? "scaleX(-1)" : "none", filter: "drop-shadow(0 6px 10px rgba(0,0,0,0.35))", animation: show ? "posikBob 1.6s ease-in-out infinite" : "none" }} />
       </button>
-      <div onClick={() => window.open(supportUrl(), "_blank")} className="rounded-2xl px-3 py-2 text-xs mb-16 cursor-pointer"
+      <div onClick={() => window.open(tip.startsWith("Parolni unutdingizmi") ? `${BOT_URL}?start=forgot` : supportUrl(), "_blank")} className="rounded-2xl px-3 py-2 text-xs mb-16 cursor-pointer"
         style={{ background: "#fff", color: "#3b285c", maxWidth: 190, boxShadow: "0 6px 18px rgba(0,0,0,0.3)", position: "relative", [left ? "marginLeft" : "marginRight"]: -6 }}>
         <button onClick={(e) => { e.stopPropagation(); setShow(false); setMuted(true); try { localStorage.setItem("posik-mute-until", String(Date.now() + 30 * 60000)); } catch (er) {} }}
           style={{ position: "absolute", top: -8, [left ? "right" : "left"]: -8, width: 20, height: 20, borderRadius: 10, background: "#3b285c", color: "#fff", fontSize: 11, lineHeight: "20px", border: "none" }}>✕</button>
@@ -1869,7 +1881,7 @@ function PosikCelebrate({ n, onClose }) {
   useEffect(() => { const t = setTimeout(onClose, 8000); return () => clearTimeout(t); }, []);
   const pieces = Array.from({ length: 48 }, (_, i) => i);
   const cols = ["#ff5a78", "#ffcd3c", "#5ac8a0", "#6ea0ff", "#be78ff"];
-  const texts = { 25: "Bugun allaqachon 25 ta stol yopildi! Ish qizib ketdi 🔥", 50: "Bugun 50 ta stol yopildi! Zo'r kun bo'lyapti! 💪", 100: "Bugun 100 ta stol!!! Siz haqiqiy chempionsiz! 🏆", 150: "150 ta stol! Rekord kun! 🚀", 200: "200 ta stol! Afsonaviy kun! 👑" };
+  const texts = { 50: "Bugun 50 ta stol yopildi! Zo'r kun bo'lyapti! 💪", 100: "Bugun 100 ta stol!!! Siz haqiqiy chempionsiz! 🏆", 150: "150 ta stol! Rekord kun! 🚀", 200: "200 ta stol! Afsonaviy kun! 👑" };
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(6,20,15,0.72)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
       {pieces.map((i) => (
@@ -1942,6 +1954,8 @@ function AuthScreen({ onRegister, onLogin }) {
                 className="w-full py-3 rounded-xl font-semibold text-sm font-display mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
                 {busy && <Loader2 size={15} className="animate-spin" />} Kirish
               </button>
+              <a href={`${BOT_URL}?start=forgot`} target="_blank" rel="noopener noreferrer"
+                className="block text-center text-xs mt-3 underline" style={{ color: "#b8c9bf" }}>Parolni unutdingizmi?</a>
             </>
           ) : (
             <>
@@ -2088,7 +2102,7 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onExtend, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword }) {
+function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onExtend, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword, onTogglePosik }) {
   const [proModal, setProModal] = useState(false);
   const pro = isPro(user);
   const [tab, setTab] = useState("halls");
@@ -2230,7 +2244,7 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
           </button>
         </div>
       )}
-      {proModal && <ProModal onClose={() => setProModal(false)} onUpgrade={() => { setProModal(false); onExtend && onExtend(); }} />}
+      {proModal && <ProModal posik={user.posikEnabled !== false} onClose={() => setProModal(false)} onUpgrade={() => { setProModal(false); onExtend && onExtend(); }} />}
 
       {isNewUser && (
         <button onClick={openGuide} style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}` }}
@@ -2279,6 +2293,19 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
             className="w-full mt-3 py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2" style={{ background: FELT_DARK, color: "#ff8a8a", border: "1px solid #b23a3a" }}>
             <LogOut size={15} /> Chiqish
           </button>
+          {onTogglePosik && (
+            <button onClick={onTogglePosik} style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }}
+              className="w-full mt-3 px-4 py-3 rounded-xl flex items-center gap-3 text-left">
+              <img src={POSIK_IMG.avatar} alt="" className="w-8 h-8 rounded-full" style={{ opacity: user.posikEnabled !== false ? 1 : 0.4 }} />
+              <div className="flex-1">
+                <div className="text-sm font-medium" style={{ color: CREAM }}>Posik yordamchi</div>
+                <div className="text-xs" style={{ color: "#8fa398" }}>Maslahatlar va tabriklar</div>
+              </div>
+              <span className="relative inline-block w-11 h-6 rounded-full transition-colors" style={{ background: user.posikEnabled !== false ? "#7bbf6a" : "#4a5a52" }}>
+                <span className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all" style={{ left: user.posikEnabled !== false ? 22 : 2 }} />
+              </span>
+            </button>
+          )}
           {user.role === "owner" && <div className="mt-3"><TelegramReportLink user={user} /></div>}
           <div className="mt-3"><SupportLink /></div>
           <div className="flex items-center justify-between mt-4">
