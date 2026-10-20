@@ -3,7 +3,7 @@ import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
   Store, LayoutGrid, Crown, Ban, Megaphone, UserPlus, Loader2, Settings, KeyRound,
-  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight, Boxes, Wallet, Minus, TrendingUp
+  StickyNote, Flag, CalendarRange, Download, Bell, BookOpen, FileText, ArrowLeftRight, Boxes, Wallet, Minus, TrendingUp, Percent, Flame
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.6.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.7.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- TIL (uz / ru) ----------------
 // Matnlar o'zbekcha yoziladi; "ru" tanlanganda ekrandagi matn lug'at bo'yicha ruschaga o'giriladi.
@@ -41,6 +41,26 @@ const TIER_FEATURES = {
 let CUR_LANG = "uz";
 try { CUR_LANG = localStorage.getItem(LANG_KEY) === "ru" ? "ru" : "uz"; } catch (e) {}
 const RU_DICT = {
+"Aksiyalar": "Акции",
+"Yangi aksiya": "Новая акция",
+"Hozir faol": "Сейчас активна",
+"Kutilmoqda": "Ожидается",
+"Tugagan": "Завершена",
+"To'xtatish": "Остановить",
+"Hammasi": "Все",
+"Stollar": "Столы",
+"Qaysi stollarga": "Для каких столов",
+"Nomi": "Название",
+"Aksiya narxi (so'm / soat)": "Цена акции (сум / час)",
+"Sana: dan": "Дата: с",
+"Sana: gacha": "Дата: по",
+"Soat: dan": "Время: с",
+"Soat: gacha": "Время: до",
+"Hozircha aksiya yo'q": "Пока нет акций",
+"Aksiyani tahrirlash": "Редактировать акцию",
+"Barcha stollar": "Все столы",
+"Saqlanmoqda...": "Сохранение...",
+"FAOL": "АКТИВНА",
 "Posik yordamchi": "Помощник Посик",
 "Maslahatlar va tabriklar": "Подсказки и поздравления",
 "💜 Posik yoqildi": "💜 Посик включён",
@@ -607,6 +627,7 @@ function mapTable(row) {
     prepaidAmount: row.prepaid_amount != null ? Number(row.prepaid_amount) : null,
     pausedAt: row.paused_at ? new Date(row.paused_at).getTime() : null,
     pausedSeconds: row.paused_seconds != null ? Number(row.paused_seconds) : 0,
+    pauseLog: Array.isArray(row.pause_log) ? row.pause_log : [],
     startedByName: row.started_by_name || "",
     extras: (row.table_extras || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price), costPrice: Number(e.cost_price || 0) })),
     laps: (row.table_laps || []).map(mapLap).sort((a, b) => a.end - b.end),
@@ -621,6 +642,165 @@ function stableTableOrder(tables) {
     return tableOrderMemory.get(a.id) - tableOrderMemory.get(b.id);
   });
 }
+function mapAksiya(row) {
+  return {
+    id: row.id, name: row.name || "Aksiya", price: Number(row.price),
+    startDate: row.start_date, endDate: row.end_date,
+    startTime: String(row.start_time || "").slice(0, 5), endTime: String(row.end_time || "").slice(0, 5),
+    hallId: row.hall_id || null, tableIds: row.table_ids && row.table_ids.length ? row.table_ids : null,
+    endedAt: row.ended_at ? new Date(row.ended_at).getTime() : null,
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : 0,
+  };
+}
+// ---------------- AKSIYA / NARX HISOBI (O'zbekiston vaqti, UTC+5, yozgi vaqt yo'q) ----------------
+const UZ_OFF = 5 * 3600 * 1000;
+function uzDateStr(ms) {
+  const d = new Date(ms + UZ_OFF);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+function uzMinuteOfDay(ms) { const d = new Date(ms + UZ_OFF); return d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60 + d.getUTCMilliseconds() / 60000; }
+function uzDayStart(ms) { const d = new Date(ms + UZ_OFF); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - UZ_OFF; }
+function uzDateToMs(dateStr) { const [y, m, d] = dateStr.split("-").map(Number); return Date.UTC(y, m - 1, d) - UZ_OFF; }
+function hmToMin(hm) { const [h, m] = String(hm || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); }
+function nowUzDateStr() { return uzDateStr(Date.now()); }
+
+function promoAppliesToTable(p, tableId, hallId) {
+  if (p.tableIds && p.tableIds.length) return p.tableIds.includes(tableId);
+  if (p.hallId) return p.hallId === hallId;
+  return true;
+}
+// p: { price, startDate, endDate, startTime, endTime, endedAt }
+function promoActiveAt(p, ms) {
+  if (p.endedAt && ms >= p.endedAt) return false;
+  const s = hmToMin(p.startTime), e = hmToMin(p.endTime);
+  if (s === e) return false;
+  const min = uzMinuteOfDay(ms);
+  let day = null;
+  if (s < e) { if (min >= s && min < e) day = uzDateStr(ms); }
+  else { // tunda o'tadigan aksiya, masalan 22:00 — 02:00
+    if (min >= s) day = uzDateStr(ms);
+    else if (min < e) day = uzDateStr(ms - 24 * 3600 * 1000);
+  }
+  return !!day && day >= p.startDate && day <= p.endDate;
+}
+function promosForTable(promos, tableId, hallId) { return (promos || []).filter((p) => promoAppliesToTable(p, tableId, hallId)); }
+// Shu daqiqadagi narx: aksiya bo'lsa eng arzon aksiya narxi
+function rateAt(table, hallId, promos, ms) {
+  let rate = table.rate, promo = null;
+  for (const p of promosForTable(promos, table.id, hallId)) {
+    if (promoActiveAt(p, ms) && (promo === null || p.price < rate)) { rate = p.price; promo = p; }
+  }
+  return { rate, promo };
+}
+// Narx o'zgarishi mumkin bo'lgan barcha nuqtalar (aksiya boshlanishi/tugashi, o'chirilgan vaqti)
+function rateBoundaries(table, hallId, promos, a, b) {
+  const pts = new Set([a, b]);
+  const ps = promosForTable(promos, table.id, hallId);
+  if (!ps.length) return [a, b];
+  const DAY = 24 * 3600 * 1000;
+  for (let day = uzDayStart(a) - DAY; day <= uzDayStart(b) + DAY; day += DAY) {
+    for (const p of ps) {
+      for (const m of [hmToMin(p.startTime), hmToMin(p.endTime)]) {
+        const t = day + m * 60000;
+        if (t > a && t < b) pts.add(t);
+      }
+    }
+  }
+  for (const p of ps) {
+    if (p.endedAt && p.endedAt > a && p.endedAt < b) pts.add(p.endedAt);
+    for (const d of [p.startDate, p.endDate]) {
+      const t0 = uzDateToMs(d); for (const t of [t0, t0 + DAY]) if (t > a && t < b) pts.add(t);
+    }
+  }
+  return [...pts].sort((x, y) => x - y);
+}
+// [a,b] oralig'idagi narx: { cost, segments: [{ sec, rate, promo, cost }] }
+function costBetween(table, hallId, promos, a, b) {
+  const out = { cost: 0, segments: [] };
+  if (!(b > a)) return out;
+  const pts = rateBoundaries(table, hallId, promos, a, b);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const s = pts[i], e = pts[i + 1]; if (e <= s) continue;
+    const { rate, promo } = rateAt(table, hallId, promos, (s + e) / 2);
+    const sec = (e - s) / 1000, cost = (sec / 3600) * rate;
+    out.cost += cost;
+    const last = out.segments[out.segments.length - 1];
+    if (last && last.rate === rate && !!last.promo === !!promo) { last.sec += sec; last.cost += cost; }
+    else out.segments.push({ sec, rate, promo: !!promo, cost });
+  }
+  return out;
+}
+// O'yin bo'lgan haqiqiy vaqt oraliqlari (pauzalarsiz)
+function playIntervals(t, end) {
+  if (!t.startTime) return { ivs: [], scale: 1 };
+  let stop = end;
+  if (t.status === "paused" && t.pausedAt) stop = Math.min(stop, t.pausedAt);
+  let ivs = stop > t.startTime ? [[t.startTime, stop]] : [];
+  const log = (t.pauseLog || []).filter((p) => Array.isArray(p) && p[1] > p[0]);
+  for (const [ps, pe] of log) {
+    const next = [];
+    for (const [s, e] of ivs) {
+      if (pe <= s || ps >= e) { next.push([s, e]); continue; }
+      if (ps > s) next.push([s, ps]);
+      if (pe < e) next.push([pe, e]);
+    }
+    ivs = next;
+  }
+  // eski (pause_log'siz) seanslar: pauza vaqtini proporsional ayiramiz
+  let scale = 1;
+  const wall = ivs.reduce((s, [a, b]) => s + (b - a), 0) / 1000;
+  const logged = log.reduce((s, [a, b]) => s + (b - a), 0) / 1000;
+  const unlogged = Math.max(0, (t.pausedSeconds || 0) - logged);
+  if (unlogged > 1 && wall > 0) scale = Math.max(0, wall - unlogged) / wall;
+  return { ivs, scale };
+}
+// Stol narxi (aksiya hisobga olingan). from/to — znak (lap) oynasi uchun ixtiyoriy chegara
+function tableCharge(t, hallId, promos, end, from, to) {
+  const { ivs, scale } = playIntervals(t, end);
+  const res = { cost: 0, promoSec: 0, segments: [] };
+  for (let [a, b] of ivs) {
+    if (from != null) a = Math.max(a, from);
+    if (to != null) b = Math.min(b, to);
+    if (!(b > a)) continue;
+    const c = costBetween(t, hallId, promos, a, b);
+    for (const sg of c.segments) {
+      const seg = { ...sg, sec: sg.sec * scale, cost: sg.cost * scale };
+      res.cost += seg.cost; if (seg.promo) res.promoSec += seg.sec;
+      const last = res.segments[res.segments.length - 1];
+      if (last && last.rate === seg.rate && last.promo === seg.promo) { last.sec += seg.sec; last.cost += seg.cost; }
+      else res.segments.push(seg);
+    }
+  }
+  return res;
+}
+// Oldindan to'langan summaga qancha vaqt beriladi (aksiya hisobga olinadi)
+function secondsForAmount(table, hallId, promos, startMs, amount) {
+  if (!(amount > 0)) return 0;
+  let t = startMs, paid = 0;
+  const limit = startMs + 3 * 24 * 3600 * 1000;
+  while (t < limit) {
+    const pts = rateBoundaries(table, hallId, promos, t, Math.min(limit, t + 6 * 3600 * 1000));
+    const e = pts[1];
+    const { rate } = rateAt(table, hallId, promos, (t + e) / 2);
+    const segCost = ((e - t) / 3600000) * rate;
+    if (paid + segCost >= amount) return (t - startMs) / 1000 + ((amount - paid) / rate) * 3600;
+    paid += segCost; t = e;
+  }
+  return (limit - startMs) / 1000;
+}
+// Aksiya holati: "now" | "upcoming" | "ended"
+function promoStatus(p, ms) {
+  if (p.endedAt && p.endedAt <= ms) return "ended";
+  const today = uzDateStr(ms);
+  if (today > p.endDate) {
+    // tunda o'tadigan aksiyaning oxirgi kechasi hali davom etayotgan bo'lishi mumkin
+    if (promoActiveAt(p, ms)) return "now";
+    return "ended";
+  }
+  if (promoActiveAt(p, ms)) return "now";
+  return "upcoming";
+}
+
 function mapHall(row) { return { id: row.id, name: row.name, tables: stableTableOrder((row.billiard_tables || []).map(mapTable)) }; }
 function mapBarItem(row) { return { id: row.id, name: row.name, price: Number(row.price), costPrice: Number(row.cost_price || 0), emoji: row.emoji, color: row.color }; }
 function mapHistory(row) {
@@ -674,7 +854,7 @@ function mapShift(row) {
 
 // ---------------- data fetch helpers ----------------
 async function fetchOwnerData(ownerId) {
-  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes, staffRes, salariesRes, salaryPayRes, shiftsRes] = await Promise.all([
+  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes, staffRes, salariesRes, salaryPayRes, shiftsRes, promosRes] = await Promise.all([
     supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" }),
     supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
@@ -688,9 +868,11 @@ async function fetchOwnerData(ownerId) {
     supabase.from("staff_salaries").select("*").eq("owner_id", ownerId),
     supabase.from("salary_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
     supabase.from("shifts").select("*").eq("owner_id", ownerId).order("opened_at", { ascending: false }).limit(60),
+    supabase.from("promotions").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }),
   ]);
   return {
     halls: (hallsRes.data || []).map(mapHall),
+    promos: (promosRes && !promosRes.error ? promosRes.data || [] : []).map(mapAksiya),
     bar: (barRes.data || []).map(mapBarItem),
     history: (histRes.data || []).map(mapHistory),
     chats: (chatRes.data || []).map(mapChat),
@@ -794,6 +976,7 @@ export default function BilliardPOS() {
   const [staffSalaries, setStaffSalaries] = useState([]);
   const [salaryPayments, setSalaryPayments] = useState([]);
   const [shifts, setShifts] = useState([]);
+  const [promos, setPromos] = useState([]);
   const [history, setHistory] = useState([]);
   const [myChat, setMyChat] = useState([]);
 
@@ -840,7 +1023,7 @@ export default function BilliardPOS() {
                 if (isBanned(accessUser)) { setScreen("banned"); }
                 else {
                   const od = await fetchOwnerData(ownerIdOf(u));
-                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
+                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
                   setScreen(canAccess(accessUser) ? "halls" : "subscribe");
                 }
               }
@@ -913,7 +1096,7 @@ export default function BilliardPOS() {
 
   async function refreshOwnerData(ownerId) {
     const od = await fetchOwnerData(ownerId || ownerIdOf(currentUser));
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
   }
   // Hisobot ekranlariga (Statistika, Moliya, Sklad, Qarz) kirganda har safar bazadan yangi ma'lumot olib kelamiz —
   // shunda eskirgan holat (masalan boshqa qurilmadan qilingan o'zgarish) doim to'g'ri ko'rinadi.
@@ -991,7 +1174,7 @@ export default function BilliardPOS() {
     if (u.role === "staff") setCurrentUser({ ...u, betaAccess: accessUser.betaAccess, planTier: accessUser.planTier, accountType: accessUser.accountType });
     if (isBanned(accessUser)) { setScreen("banned"); return; }
     const od = await fetchOwnerData(ownerIdOf(u));
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts);
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
     setScreen(canAccess(accessUser) ? "halls" : "subscribe");
   }
 
@@ -1050,6 +1233,27 @@ export default function BilliardPOS() {
     await refreshOwnerData();
   }
   async function editTable(hallId, tableId, name, rate) { await supabase.from("billiard_tables").update({ name, rate }).eq("id", tableId); await refreshOwnerData(); }
+  async function savePromo(f) {
+    const payload = {
+      owner_id: ownerIdOf(currentUser), name: (f.name || "Aksiya").trim(), price: Number(f.price),
+      start_date: f.startDate, end_date: f.endDate, start_time: f.startTime, end_time: f.endTime,
+      hall_id: f.scope === "hall" ? f.hallId : null, table_ids: f.scope === "tables" ? f.tableIds : null, ended_at: null,
+    };
+    const r = f.id ? await supabase.from("promotions").update(payload).eq("id", f.id) : await supabase.from("promotions").insert(payload);
+    if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return false; }
+    showToast(f.id ? "✅ Aksiya yangilandi" : "🔥 Aksiya qo'shildi");
+    await refreshOwnerData(); return true;
+  }
+  async function endPromo(id) {
+    const r = await supabase.from("promotions").update({ ended_at: new Date().toISOString() }).eq("id", id);
+    if (r.error) showToast(`❌ Xatolik: ${r.error.message}`); else showToast("Aksiya to'xtatildi");
+    await refreshOwnerData();
+  }
+  async function deletePromo(id) {
+    const r = await supabase.from("promotions").delete().eq("id", id);
+    if (r.error) showToast(`❌ Xatolik: ${r.error.message}`); else showToast("Aksiya o'chirildi");
+    await refreshOwnerData();
+  }
   async function deleteTable(hallId, tableId) { await supabase.from("billiard_tables").delete().eq("id", tableId); await refreshOwnerData(); }
   async function startTable(hallId, tableId, targetSeconds, prepaidAmount) {
     await supabase.from("table_extras").delete().eq("table_id", tableId);
@@ -1057,7 +1261,7 @@ export default function BilliardPOS() {
     await supabase.from("billiard_tables").update({
       status: "playing", start_time: new Date().toISOString(), note: null,
       target_seconds: targetSeconds || null, prepaid_amount: prepaidAmount || null,
-      paused_at: null, paused_seconds: 0,
+      paused_at: null, paused_seconds: 0, pause_log: [],
       started_by_name: currentUser.name,
     }).eq("id", tableId);
     await refreshOwnerData();
@@ -1072,10 +1276,12 @@ export default function BilliardPOS() {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
     if (!table || !table.pausedAt) return;
-    const addedPause = (Date.now() - table.pausedAt) / 1000;
+    const resumedAt = Date.now();
+    const addedPause = (resumedAt - table.pausedAt) / 1000;
     await supabase.from("billiard_tables").update({
       status: "playing", paused_at: null,
       paused_seconds: (table.pausedSeconds || 0) + addedPause,
+      pause_log: [...(table.pauseLog || []), [table.pausedAt, resumedAt]],
     }).eq("id", tableId);
     await refreshOwnerData();
   }
@@ -1087,12 +1293,13 @@ export default function BilliardPOS() {
       status: source.status, start_time: source.startTime ? new Date(source.startTime).toISOString() : null,
       note: source.note || null, target_seconds: source.targetSeconds, prepaid_amount: source.prepaidAmount,
       paused_at: source.pausedAt ? new Date(source.pausedAt).toISOString() : null, paused_seconds: source.pausedSeconds || 0,
+      pause_log: source.pauseLog || [],
     }).eq("id", destTableId);
     await supabase.from("table_extras").update({ table_id: destTableId }).eq("table_id", sourceTableId);
     await supabase.from("table_laps").update({ table_id: destTableId }).eq("table_id", sourceTableId);
     await supabase.from("billiard_tables").update({
       status: "free", start_time: null, note: null, target_seconds: null, prepaid_amount: null,
-      paused_at: null, paused_seconds: 0,
+      paused_at: null, paused_seconds: 0, pause_log: [],
     }).eq("id", sourceTableId);
     await refreshOwnerData();
   }
@@ -1291,13 +1498,13 @@ export default function BilliardPOS() {
         return;
       }
 
-      const rate = table.rate;
       const existingLaps = table.laps;
       const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
       const finalDuration = Math.max(0, (record.endTime - lastCheckpoint) / 1000);
-      const finalLap = { start: lastCheckpoint, end: record.endTime, duration: finalDuration, comment: "", cost: (finalDuration / 3600) * rate };
+      const lapCost = (a, b) => tableCharge(table, hallId, promos, record.endTime, a, b).cost;
+      const finalLap = { start: lastCheckpoint, end: record.endTime, duration: finalDuration, comment: "", cost: lapCost(lastCheckpoint, record.endTime) };
       const allLaps = [
-        ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
+        ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: lapCost(l.start, l.end) })),
         finalLap,
       ];
 
@@ -1621,6 +1828,7 @@ export default function BilliardPOS() {
           onOpenHall={(id) => { setActiveHallId(id); setScreen("hall"); }}
           onLogout={handleLogout} onStats={() => setScreen("stats")} onExtend={() => setScreen("subscribe")}
           onWarehouse={() => setScreen("warehouse")} onDebts={() => setScreen("debts")}
+          promos={promos} onPromos={() => setScreen("promos")}
           onFinance={() => setScreen("finance")} onStaff={() => setScreen("staff")}
           shifts={shifts} onOpenShift={openShift} onCloseShift={closeShift}
           history={history} warehouseLogs={warehouseLogs}
@@ -1661,10 +1869,14 @@ export default function BilliardPOS() {
         />
       )}
 
+      {screen === "promos" && currentUser && currentUser.role === "owner" && (
+        <PromosScreen halls={halls} promos={promos} onBack={() => setScreen("halls")} onSave={savePromo} onEnd={endPromo} onDelete={deletePromo} />
+      )}
+
       {screen === "hall" && currentUser && (
         <HallScreen
           user={currentUser}
-          hall={halls.find((h) => h.id === activeHallId)} allHalls={halls} bar={bar} now={now}
+          hall={halls.find((h) => h.id === activeHallId)} allHalls={halls} bar={bar} now={now} promos={promos}
           onBack={() => setScreen("halls")}
           onCreateTable={(name, rate) => createTable(activeHallId, name, rate)}
           onEditTable={(tid, name, rate) => editTable(activeHallId, tid, name, rate)}
@@ -2102,7 +2314,7 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onExtend, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword, onTogglePosik }) {
+function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onExtend, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword, onTogglePosik }) {
   const [proModal, setProModal] = useState(false);
   const pro = isPro(user);
   const [tab, setTab] = useState("halls");
@@ -2233,6 +2445,25 @@ function HallsScreen({ user, halls, bar, onCreateHall, onRenameHall, onDeleteHal
           </button>
         </div>
       )}
+
+      {user.role === "owner" && (
+        <button onClick={onPromos} style={{ background: "linear-gradient(120deg,#5a1f45,#3d1530)", border: "1px solid #ff7ab6" }} className="w-full py-3 mb-4 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+          <Percent size={16} style={{ color: "#ff7ab6" }} /> <span style={{ color: CREAM }}>Aksiyalar</span>
+          {promos.some((p) => promoStatus(p, Date.now()) === "now") && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: "#ff7ab6", color: "#3a0820" }}>FAOL</span>}
+        </button>
+      )}
+      {(() => {
+        const live = promos.filter((p) => promoStatus(p, Date.now()) === "now");
+        if (!live.length) return null;
+        return (
+          <div className="mb-4 px-4 py-3 rounded-xl flex items-center gap-2" style={{ background: "rgba(255,122,182,0.14)", border: "1px solid #ff7ab6" }}>
+            <Flame size={18} style={{ color: "#ff7ab6" }} />
+            <div className="text-xs" style={{ color: "#ffd1e6" }}>
+              {live.map((p) => <div key={p.id}><b>{p.name}</b>: {p.startTime}—{p.endTime}, {fmtMoney(p.price)}/soat · {promoScopeText(p, halls)}</div>)}
+            </div>
+          </div>
+        );
+      })()}
 
       {(user.betaAccess || user.role === "owner") && (
         <div className="grid grid-cols-2 gap-3 mb-4">
@@ -3202,7 +3433,124 @@ function StaffScreen({ staffList, staffSalaries, salaryPayments, history, onBack
 }
 
 // ---------------- HALL ----------------
-function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtrasBatch, onAddExtraTime, onClose, onUpdateNote, onAddLap, onToast }) {
+// ---------------- AKSIYALAR ----------------
+function addDaysStr(dateStr, n) { return uzDateStr(uzDateToMs(dateStr) + n * 24 * 3600 * 1000 + 12 * 3600 * 1000); }
+function fmtUzDate(d) { if (!d) return ""; const [y, m, dd] = d.split("-"); return `${dd}.${m}.${y}`; }
+function promoScopeText(p, halls) {
+  if (p.tableIds && p.tableIds.length) {
+    const names = [];
+    halls.forEach((h) => h.tables.forEach((t) => { if (p.tableIds.includes(t.id)) names.push(`${h.name}: ${t.name}`); }));
+    return names.length ? names.join(", ") : `${p.tableIds.length} ta stol`;
+  }
+  if (p.hallId) { const h = halls.find((x) => x.id === p.hallId); return h ? `Zal: ${h.name}` : "Zal o'chirilgan"; }
+  return "Barcha stollar";
+}
+function PromosScreen({ halls, promos, onBack, onSave, onEnd, onDelete }) {
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const now = Date.now();
+  function openNew() {
+    const today = nowUzDateStr();
+    setForm({ id: null, name: "Kunduzgi aksiya", price: "", startDate: today, endDate: addDaysStr(today, 30), startTime: "10:00", endTime: "17:00", scope: "all", hallId: halls[0] ? halls[0].id : "", tableIds: [] });
+  }
+  function openEdit(p) {
+    setForm({ id: p.id, name: p.name, price: String(p.price), startDate: p.startDate, endDate: p.endDate, startTime: p.startTime, endTime: p.endTime,
+      scope: p.tableIds && p.tableIds.length ? "tables" : p.hallId ? "hall" : "all", hallId: p.hallId || (halls[0] ? halls[0].id : ""), tableIds: p.tableIds || [] });
+  }
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const err = !form ? "" :
+    !(Number(form.price) > 0) ? "Aksiya narxini kiriting" :
+    !form.startDate || !form.endDate ? "Sanalarni kiriting" :
+    form.startDate > form.endDate ? "Boshlanish sanasi tugash sanasidan keyin bo'lmasin" :
+    form.startTime === form.endTime ? "Boshlanish va tugash soati bir xil bo'lmasin" :
+    form.scope === "hall" && !form.hallId ? "Zalni tanlang" :
+    form.scope === "tables" && form.tableIds.length === 0 ? "Kamida bitta stol tanlang" : "";
+  const inp = { background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` };
+  const statusChip = (st) => st === "now" ? { t: "Hozir faol", bg: "#ff7ab6", fg: "#3a0820" } : st === "upcoming" ? { t: "Kutilmoqda", bg: GOLD, fg: FELT_DARK } : { t: "Tugagan", bg: FELT_LIGHT, fg: CREAM };
+  return (
+    <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
+      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Zallar</button>
+      <h1 className="font-display text-2xl font-semibold mb-1 flex items-center gap-2" style={{ color: CREAM }}><Percent size={22} style={{ color: "#ff7ab6" }} /> Aksiyalar</h1>
+      <p className="text-xs mb-4" style={{ color: "#8fa398" }}>Belgilangan soatlarda stol arzonroq narxda hisoblanadi. Vaqt — O'zbekiston vaqti bilan. Agar o'yin aksiya tugagandan keyin ham davom etsa, aksiya vaqtigacha arzon narxda, undan keyin oddiy narxda hisoblanadi.</p>
+      <button onClick={openNew} style={{ background: "#ff7ab6", color: "#3a0820" }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 mb-4"><Plus size={16} /> Yangi aksiya</button>
+      {promos.length === 0 && <p className="text-sm text-center opacity-70 py-6" style={{ color: CREAM }}>Hozircha aksiya yo'q</p>}
+      <div className="space-y-3">
+        {promos.map((p) => {
+          const st = promoStatus(p, now); const c = statusChip(st);
+          return (
+            <div key={p.id} className="p-4 rounded-2xl" style={{ background: FELT, border: `1px solid ${st === "now" ? "#ff7ab6" : FELT_LIGHT}`, boxShadow: st === "now" ? "0 0 14px rgba(255,122,182,0.35)" : "none" }}>
+              <div className="flex justify-between items-start mb-2">
+                <div className="font-display font-semibold" style={{ color: CREAM }}>{p.name}</div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: c.bg, color: c.fg }}>{c.t}</span>
+              </div>
+              <div className="text-lg font-bold mb-1" style={{ color: "#ffd1e6" }}>{fmtMoney(p.price)}/soat</div>
+              <div className="text-xs mb-0.5" style={{ color: "#b8c9bf" }}>🕒 Har kuni {p.startTime} — {p.endTime}</div>
+              <div className="text-xs mb-0.5" style={{ color: "#b8c9bf" }}>📅 {fmtUzDate(p.startDate)} — {fmtUzDate(p.endDate)}</div>
+              <div className="text-xs mb-3" style={{ color: "#b8c9bf" }}>🎱 {promoScopeText(p, halls)}</div>
+              {p.endedAt && <div className="text-[11px] mb-2" style={{ color: "#8fa398" }}>To'xtatilgan: {fmtDate(p.endedAt)} {fmtTime(p.endedAt)}</div>}
+              <div className="flex gap-2">
+                <button onClick={() => openEdit(p)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><Pencil size={12} /> Tahrirlash</button>
+                {st !== "ended" && (
+                  <button onClick={async () => { if (confirm("Aksiyani hoziroq to'xtatasizmi? Shu daqiqadan boshlab oddiy narx hisoblanadi.")) { setBusy(true); await onEnd(p.id); setBusy(false); } }} disabled={busy} className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: "#d19a4f", color: FELT_DARK }}>To'xtatish</button>
+                )}
+                <button onClick={async () => { if (confirm("Aksiyani butunlay o'chirasizmi? Hozir o'ynalayotgan stollar ham oddiy narxga o'tadi.")) { setBusy(true); await onDelete(p.id); setBusy(false); } }} disabled={busy} className="py-2 px-3 rounded-lg text-xs" style={{ background: RED, color: "#fff" }}><Trash2 size={12} /></button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {form && (
+        <Modal onClose={() => setForm(null)}>
+          <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>{form.id ? "Aksiyani tahrirlash" : "Yangi aksiya"}</h2>
+          <label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Nomi</label>
+          <input value={form.name} onChange={(e) => set("name", e.target.value)} className="w-full mb-3 px-4 py-2.5 rounded-xl outline-none text-sm" style={inp} />
+          <label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Aksiya narxi (so'm / soat)</label>
+          <input value={form.price} onChange={(e) => set("price", e.target.value.replace(/[^0-9]/g, ""))} placeholder="masalan 25000" className="w-full mb-3 px-4 py-2.5 rounded-xl outline-none text-sm font-mono" style={inp} />
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div><label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Sana: dan</label><input type="date" value={form.startDate} onChange={(e) => set("startDate", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
+            <div><label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Sana: gacha</label><input type="date" value={form.endDate} onChange={(e) => set("endDate", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
+            <div><label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Soat: dan</label><input type="time" value={form.startTime} onChange={(e) => set("startTime", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
+            <div><label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Soat: gacha</label><input type="time" value={form.endTime} onChange={(e) => set("endTime", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
+          </div>
+          <p className="text-[11px] mb-3" style={{ color: "#8fa398" }}>O'zbekiston vaqti bilan, har kuni shu soatlarda ishlaydi.{hmToMin(form.endTime) < hmToMin(form.startTime) ? " Tunda o'tadigan aksiya: ertasi kuni ertalab tugaydi." : ""}</p>
+          <label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Qaysi stollarga</label>
+          <div className="flex gap-2 mb-3">
+            {[["all", "Hammasi"], ["hall", "Zal"], ["tables", "Stollar"]].map(([k, l]) => (
+              <button key={k} onClick={() => set("scope", k)} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: form.scope === k ? "#ff7ab6" : FELT_DARK, color: form.scope === k ? "#3a0820" : CREAM, border: `1px solid ${FELT_LIGHT}` }}>{l}</button>
+            ))}
+          </div>
+          {form.scope === "hall" && (
+            <select value={form.hallId} onChange={(e) => set("hallId", e.target.value)} className="w-full mb-3 px-3 py-2.5 rounded-xl outline-none text-sm" style={inp}>
+              {halls.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+            </select>
+          )}
+          {form.scope === "tables" && (
+            <div className="max-h-48 overflow-y-auto mb-3 space-y-2">
+              {halls.map((h) => (
+                <div key={h.id}>
+                  <div className="text-[11px] mb-1" style={{ color: "#8fa398" }}>{h.name}</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {h.tables.map((t) => {
+                      const on = form.tableIds.includes(t.id);
+                      return <button key={t.id} onClick={() => set("tableIds", on ? form.tableIds.filter((x) => x !== t.id) : [...form.tableIds, t.id])}
+                        className="px-2.5 py-1.5 rounded-lg text-xs" style={{ background: on ? "#ff7ab6" : FELT_DARK, color: on ? "#3a0820" : CREAM, border: `1px solid ${FELT_LIGHT}` }}>{t.name} · {fmtMoney(t.rate)}</button>;
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {err && <p className="text-xs mb-3" style={{ color: "#ff8a8a" }}>{err}</p>}
+          <button disabled={!!err || busy} onClick={async () => { setBusy(true); const ok = await onSave(form); setBusy(false); if (ok) setForm(null); }}
+            style={{ background: "#ff7ab6", color: "#3a0820" }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">{busy ? "Saqlanmoqda..." : "Saqlash"}</button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function HallScreen({ user, hall, allHalls, bar, now, promos = [], onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtrasBatch, onAddExtraTime, onClose, onUpdateNote, onAddLap, onToast }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editTableObj, setEditTableObj] = useState(null);
   const [tName, setTName] = useState(""); const [tRate, setTRate] = useState("");
@@ -3275,7 +3623,9 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
     }
     return t.status !== "playing" || !t.startTime ? 0 : Math.max(0, (now - t.startTime) / 1000 - (t.pausedSeconds || 0));
   }
-  function tableCost(t) { return (elapsedSeconds(t) / 3600) * t.rate; }
+  function chargeOf(t, end) { return tableCharge(t, hall.id, promos, end != null ? end : now); }
+  function tableCost(t, end) { return chargeOf(t, end).cost; }
+  function lapCostOf(t, a, b, end) { return tableCharge(t, hall.id, promos, end != null ? end : now, a, b).cost; }
   function extrasTotal(t) { return t.extras.reduce((s, e) => s + e.price, 0); }
   const filteredBar = bar.filter((b) => b.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -3288,8 +3638,19 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
         {hall.tables.map((t) => {
           const playing = t.status === "playing";
           const paused = t.status === "paused";
+          const cur = rateAt(t, hall.id, promos, now);
+          const promoOn = !!cur.promo;
+          const cardBg = promoOn
+            ? (playing ? "linear-gradient(160deg,#0f6b4a,#12573f)" : paused ? "linear-gradient(160deg,#5a4610,#473708)" : "linear-gradient(160deg,#1c8a5c,#147049)")
+            : (playing ? "linear-gradient(160deg,#0e4a36,#0b3d2e)" : paused ? "linear-gradient(160deg,#4a3a0e,#3d2e0b)" : FELT);
+          const cardBorder = promoOn ? "#ff7ab6" : (playing ? GOLD : paused ? "#d19a4f" : FELT_LIGHT);
           return (
-            <div key={t.id} style={{ background: playing ? "linear-gradient(160deg,#0e4a36,#0b3d2e)" : paused ? "linear-gradient(160deg,#4a3a0e,#3d2e0b)" : FELT, border: `2px solid ${playing ? GOLD : paused ? "#d19a4f" : FELT_LIGHT}`, borderRadius: 20 }} className="p-4 relative overflow-hidden">
+            <div key={t.id} style={{ background: cardBg, border: `2px solid ${cardBorder}`, borderRadius: 20, boxShadow: promoOn ? "0 0 18px rgba(255,122,182,0.45)" : "none" }} className="p-4 relative overflow-hidden">
+              {promoOn && (
+                <div className="absolute top-0 right-0 px-2 py-0.5 text-[10px] font-bold flex items-center gap-1" style={{ background: "#ff7ab6", color: "#3a0820", borderBottomLeftRadius: 10 }}>
+                  <Flame size={10} /> AKSIYA · {cur.promo.endTime} gacha
+                </div>
+              )}
               <div className="absolute -top-1 -left-1 w-3 h-3 rounded-full" style={{ background: FELT_DARK }} />
               <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full" style={{ background: FELT_DARK }} />
               <div className="absolute -bottom-1 -left-1 w-3 h-3 rounded-full" style={{ background: FELT_DARK }} />
@@ -3304,7 +3665,14 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
                   </div>
                 )}
               </div>
-              <div className="text-xs mb-3" style={{ color: "#b8c9bf" }}>{fmtMoney(t.rate)}/soat</div>
+              {promoOn ? (
+                <div className="text-xs mb-3 flex items-center gap-1.5 flex-wrap">
+                  <span style={{ color: "#b8c9bf", textDecoration: "line-through" }}>{fmtMoney(t.rate)}</span>
+                  <span className="font-bold" style={{ color: "#ffd1e6" }}>{fmtMoney(cur.rate)}/soat</span>
+                </div>
+              ) : (
+                <div className="text-xs mb-3" style={{ color: "#b8c9bf" }}>{fmtMoney(t.rate)}/soat</div>
+              )}
 
               {playing || paused ? (
                 <>
@@ -3405,7 +3773,16 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
       {confirmStart && (
         <Modal onClose={() => { setConfirmStart(null); setStartMode("vip"); setStartAmount(""); }}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{confirmStart.name}" da o'ynashni boshlaysizmi?</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Narx: {fmtMoney(confirmStart.rate)}/soat</p>
+          {(() => {
+            const cr = rateAt(confirmStart, hall.id, promos, now);
+            return cr.promo ? (
+              <div className="text-sm mb-4 px-3 py-2 rounded-xl" style={{ background: "rgba(255,122,182,0.15)", border: "1px solid #ff7ab6", color: "#ffd1e6" }}>
+                <Flame size={13} className="inline mr-1" />Aksiya: <span style={{ textDecoration: "line-through", opacity: 0.7 }}>{fmtMoney(confirmStart.rate)}</span> <b>{fmtMoney(cr.rate)}/soat</b> — {cr.promo.endTime} gacha. Undan keyin {fmtMoney(confirmStart.rate)}/soat dan hisoblanadi.
+              </div>
+            ) : (
+              <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Narx: {fmtMoney(confirmStart.rate)}/soat</p>
+            );
+          })()}
 
           <div className="flex gap-2 mb-4">
             <button onClick={() => setStartMode("vip")} className="flex-1 py-2.5 rounded-xl text-sm font-medium"
@@ -3425,7 +3802,7 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
                 className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
               {startAmount && (
                 <div className="text-xs mt-2" style={{ color: GOLD }}>
-                  ≈ {fmtDuration((Number(startAmount) / confirmStart.rate) * 3600)} vaqt beriladi, tugaganda ovozli ogohlantirish keladi
+                  ≈ {fmtDuration(secondsForAmount(confirmStart, hall.id, promos, Date.now(), Number(startAmount)))} vaqt beriladi, tugaganda ovozli ogohlantirish keladi
                 </div>
               )}
             </div>
@@ -3437,7 +3814,7 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
               disabled={startMode === "amount" && !startAmount}
               onClick={() => {
                 if (startMode === "amount" && startAmount) {
-                  const targetSeconds = (Number(startAmount) / confirmStart.rate) * 3600;
+                  const targetSeconds = secondsForAmount(confirmStart, hall.id, promos, Date.now(), Number(startAmount));
                   onStart(confirmStart.id, targetSeconds, Number(startAmount));
                 } else {
                   onStart(confirmStart.id, null, null);
@@ -3527,12 +3904,12 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
               const existingLaps = confirmClose.laps || [];
               const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : confirmClose.startTime;
               const finalDuration = Math.max(0, (endTime - lastCheckpoint) / 1000);
-              const rate = confirmClose.rate;
               const previewLaps = [
-                ...existingLaps.map((l) => ({ duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
-                { duration: finalDuration, comment: "", cost: (finalDuration / 3600) * rate },
+                ...existingLaps.map((l) => ({ duration: l.duration, comment: l.comment, cost: lapCostOf(confirmClose, l.start, l.end, endTime) })),
+                { duration: finalDuration, comment: "", cost: lapCostOf(confirmClose, lastCheckpoint, endTime, endTime) },
               ];
-              setReceipt({ table: confirmClose, startTime: confirmClose.startTime, endTime, duration: elapsedSeconds(confirmClose), tableCost: tableCost(confirmClose), extras: confirmClose.extras, extrasCost: extrasTotal(confirmClose), laps: previewLaps, generalNote: confirmClose.note });
+              const ch = chargeOf(confirmClose, endTime);
+              setReceipt({ table: confirmClose, startTime: confirmClose.startTime, endTime, duration: elapsedSeconds(confirmClose), tableCost: ch.cost, breakdown: ch.segments, extras: confirmClose.extras, extrasCost: extrasTotal(confirmClose), laps: previewLaps, generalNote: confirmClose.note });
               setConfirmClose(null);
             }} style={{ background: RED, color: "#fff" }} className="flex-1 py-3 rounded-xl text-sm font-semibold">Yopish</button>
           </div>
@@ -3555,7 +3932,7 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
           {(() => {
             const lastEnd = lapTable.laps.length > 0 ? Math.max(...lapTable.laps.map((l) => l.end)) : lapTable.startTime;
             const segSeconds = Math.max(0, (now - lastEnd) / 1000);
-            const segCost = (segSeconds / 3600) * lapTable.rate;
+            const segCost = lapCostOf(lapTable, lastEnd, now);
             return (
               <div className="flex items-center justify-between mb-4 px-3 py-2 rounded-lg" style={{ background: FELT_DARK }}>
                 <span className="text-xs" style={{ color: "#b8c9bf" }}>Shu segment: {fmtDuration(segSeconds)}</span>
@@ -3589,19 +3966,19 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
       )}
 
       {viewTable && (() => {
-        const rate = viewTable.rate;
         const existingLaps = viewTable.laps;
         const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : viewTable.startTime;
         const liveSeg = Math.max(0, (now - lastCheckpoint) / 1000);
         const liveLaps = [
-          ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: (l.duration / 3600) * rate })),
-          { start: lastCheckpoint, end: now, duration: liveSeg, comment: "hozirgi, davom etmoqda", cost: (liveSeg / 3600) * rate },
+          ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: lapCostOf(viewTable, l.start, l.end) })),
+          { start: lastCheckpoint, end: now, duration: liveSeg, comment: "hozirgi, davom etmoqda", cost: lapCostOf(viewTable, lastCheckpoint, now) },
         ];
+        const viewCh = chargeOf(viewTable);
         return (
           <Modal onClose={() => setViewTable(null)}>
             <p className="text-xs mb-2 px-2 py-1.5 rounded-lg text-center" style={{ background: "rgba(201,162,39,0.12)", color: GOLD }}>Stol yopilmadi — bu shunchaki hozirgi hisob</p>
             <ReceiptView title={viewTable.name} start={viewTable.startTime} end={now}
-              duration={elapsedSeconds(viewTable)} tableCost={tableCost(viewTable)}
+              duration={elapsedSeconds(viewTable)} tableCost={viewCh.cost} breakdown={viewCh.segments}
               extras={viewTable.extras} extrasCost={extrasTotal(viewTable)}
               laps={liveLaps} generalNote={viewTable.note} />
             <button onClick={() => setViewTable(null)} className="w-full py-3 rounded-xl text-sm mt-2" style={{ background: FELT_DARK, color: CREAM }}>Yopish</button>
@@ -3649,7 +4026,7 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
       {receipt && (
         <Modal onClose={null}>
           <ReceiptView title={`${hall.name} · ${receipt.table.name}`} start={receipt.startTime} end={receipt.endTime}
-            duration={receipt.duration} tableCost={receipt.tableCost} extras={receipt.extras} extrasCost={receipt.extrasCost}
+            duration={receipt.duration} tableCost={receipt.tableCost} breakdown={receipt.breakdown} extras={receipt.extras} extrasCost={receipt.extrasCost}
             laps={receipt.laps} generalNote={receipt.generalNote} />
           <div className="mb-2">
             <div className="text-xs mb-1.5" style={{ color: "#b8c9bf" }}>To'lov turi</div>
@@ -3677,7 +4054,7 @@ function HallScreen({ user, hall, allHalls, bar, now, onBack, onCreateTable, onE
   );
 }
 
-function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCost, laps, generalNote }) {
+function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCost, laps, generalNote, breakdown }) {
   return (
     <div className="mb-2">
       <div className="text-center mb-4">
@@ -3693,6 +4070,16 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
       <div className="border-t border-dashed pb-3 mb-3" style={{ borderColor: FELT_LIGHT }} />
       <div className="flex justify-between text-sm mb-2" style={{ color: "#b8c9bf" }}><span>O'yin vaqti</span><span className="font-mono" style={{ color: CREAM }}>{fmtDuration(duration)}</span></div>
       <div className="flex justify-between text-sm mb-2" style={{ color: "#b8c9bf" }}><span>Stol narxi</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(tableCost)}</span></div>
+      {breakdown && breakdown.some((b) => b.promo) && (
+        <div className="mb-2 px-3 py-2 rounded-lg" style={{ background: "rgba(255,122,182,0.1)", border: "1px dashed #ff7ab6" }}>
+          {breakdown.filter((b) => b.sec >= 1).map((b, i) => (
+            <div key={i} className="flex justify-between text-xs mb-0.5" style={{ color: b.promo ? "#ffd1e6" : "#b8c9bf" }}>
+              <span>{b.promo ? "🔥 Aksiya" : "Oddiy narx"}: {fmtDuration(b.sec)} × {fmtMoney(b.rate)}/soat</span>
+              <span className="font-mono">{fmtMoney(b.cost)}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {laps && laps.length > 1 && (
         <>
