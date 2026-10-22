@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.7.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.8.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- TIL (uz / ru) ----------------
 // Matnlar o'zbekcha yoziladi; "ru" tanlanganda ekrandagi matn lug'at bo'yicha ruschaga o'giriladi.
@@ -36,7 +36,7 @@ function isPro(u) { return !u || u.accountType === "vip" || u.planTier !== "basi
 function proOn(u) { return !!u && (isPro(u) || u.betaAccess); }
 const TIER_FEATURES = {
   basic: ["Stollar va vaqt hisobi", "Bar menyu", "Smenalar", "Statistika", "Posik maslahatlari"],
-  pro: ["Oddiy tarifdagi hammasi", "Sklad (ombor)", "Qarz daftari", "Xodimlar va oylik", "Moliya", "Telegram'da kunlik hisobot", "Posik tabriklari Telegram'da"],
+  pro: ["Oddiy tarifdagi hammasi", "Sklad (ombor)", "Qarz daftari", "Xodimlar va oylik", "Moliya", "Aksiya soatlari", "Telegram'da kunlik hisobot", "Posik tabriklari Telegram'da"],
 };
 let CUR_LANG = "uz";
 try { CUR_LANG = localStorage.getItem(LANG_KEY) === "ru" ? "ru" : "uz"; } catch (e) {}
@@ -585,6 +585,31 @@ function isBanned(u) {
   return u && u.banned && u.banUntil && u.banUntil > Date.now();
 }
 function unwrapRpc(data) { return Array.isArray(data) ? data[0] : data; }
+// ---------------- XAVFSIZLIK: sessiya tokeni ----------------
+// Har bir so'rov "x-pos-token" sarlavhasi bilan ketadi. Supabase (RLS) shu token orqali
+// kim so'rayotganini aniqlaydi va faqat o'sha klub ma'lumotlarini beradi.
+const POS_TOKEN_HEADER = "x-pos-token";
+function setDbToken(token) {
+  try {
+    const h = supabase.rest && supabase.rest.headers;
+    if (!h) return;
+    if (typeof h.set === "function") { if (token) h.set(POS_TOKEN_HEADER, token); else h.delete(POS_TOKEN_HEADER); }
+    else if (token) h[POS_TOKEN_HEADER] = token;
+    else delete h[POS_TOKEN_HEADER];
+  } catch (e) {}
+}
+// Yangi funksiya bazada hali yo'q bo'lsa (patch 29-A ishga tushirilmagan) — eski usulga qaytamiz
+// Kirgandan keyin tekshiruv: baza bizni taniyaptimi? (token sarlavhasi yetib boryaptimi)
+async function checkDbIdentity() {
+  try {
+    const w = await supabase.rpc("whoami");
+    if (w.error || !w.data) return true;
+    return !!(w.data.user_id || w.data.is_admin);
+  } catch (e) { return true; }
+}
+function rpcMissing(error) {
+  return !!error && (error.code === "PGRST202" || /could not find the function|does not exist/i.test(error.message || ""));
+}
 async function resolveAccessUser(u) {
   if (!u || u.role !== "staff" || !u.parentOwnerId) return u;
   const { data } = await supabase.from("users").select("*").eq("id", u.parentOwnerId).single();
@@ -1003,14 +1028,38 @@ export default function BilliardPOS() {
         const raw = localStorage.getItem(SESSION_KEY);
         if (raw) {
           const s = JSON.parse(raw);
-          if (s.isAdmin) {
+          let adminOk = false;
+          if (s.isAdmin && s.adminToken) {
+            setDbToken(s.adminToken);
+            const w = await supabase.rpc("whoami");
+            adminOk = rpcMissing(w.error) || !!(w.data && w.data.is_admin);
+            if (!adminOk) setDbToken(null);
+          } else if (s.isAdmin) {
+            // eski sessiya (tokensiz) — patch 29-A bo'lmasa ruxsat, bo'lsa qayta kirish kerak
+            const w = await supabase.rpc("whoami");
+            adminOk = rpcMissing(w.error);
+          }
+          if (s.isAdmin && !adminOk) {
+            persistSession({ userId: null, isAdmin: false });
+          } else if (s.isAdmin) {
             setIsAdmin(true);
             setAdminLogin(s.adminLogin || "Asliddin");
             const d = await fetchAdminData();
             setUsers(d.users); setPromoCodes(d.promoCodes); setAdminAccounts(d.adminAccounts); setChatsByUser(d.chatsByUser);
             setScreen("admin");
           } else if (s.userId) {
-            const { data } = await supabase.from("users").select("*").eq("id", s.userId).single();
+            let sessionOk = true;
+            if (s.token) {
+              setDbToken(s.token);
+              const rs = await supabase.rpc("resume_session", { p_user_id: s.userId, p_token: s.token });
+              if (!rs.error && rs.data === false) sessionOk = false;
+            }
+            if (!sessionOk) {
+              setDbToken(null);
+              persistSession({ userId: null, isAdmin: false });
+              showToast("Xavfsizlik yangilanishi: iltimos, qaytadan kiring");
+            }
+            const { data } = sessionOk ? await supabase.from("users").select("*").eq("id", s.userId).single() : { data: null };
             if (data) {
               if (SINGLE_DEVICE_LOGIN && s.token && data.active_session_token && data.active_session_token !== s.token) {
                 localStorage.removeItem(SESSION_KEY);
@@ -1123,13 +1172,33 @@ export default function BilliardPOS() {
     if (!name.trim() || !login.trim() || password.length < 8) { showToast("Barcha maydonlarni to'g'ri to'ldiring (parol kamida 8 belgi)"); return; }
     const { data, error } = await supabase.rpc("register_user", { p_name: name.trim(), p_phone: normPhone, p_login: login.trim(), p_password: password });
     if (error) { showToast(error.message.includes("LOGIN_TAKEN") ? "Bu login band" : "Xatolik yuz berdi"); return; }
-    const u = mapUser(unwrapRpc(data));
-    const token = crypto.randomUUID();
-    await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
+    let u = mapUser(unwrapRpc(data));
+    let token = null;
+    const lr = await supabase.rpc("login_user", { p_login: login.trim(), p_password: password });
+    if (lr.data && lr.data.token) { token = lr.data.token; u = mapUser(lr.data.user); setDbToken(token); }
+    else {
+      token = crypto.randomUUID();
+      await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
+    }
     try { localStorage.setItem(`billiard-pos-newuser-${u.id}`, "1"); } catch (e) {}
     setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
     persistSession({ userId: u.id, isAdmin: false, token });
     setScreen("subscribe");
+  }
+
+  // Admin kirishi: { login, token } yoki null
+  async function tryAdminLogin(login, password) {
+    const r = await supabase.rpc("login_admin", { p_login: login, p_password: password });
+    if (r.error && !rpcMissing(r.error)) { console.error("login_admin xatosi:", r.error); showToast("⚠️ Admin yangi kirishi ishlamadi — 29-B SQL'ni ishga tushirmang"); }
+    if (r.error) {
+      const old = await supabase.rpc("verify_admin_login", { p_login: login, p_password: password });
+      if (!old.error && old.data && old.data.length > 0) return { login: old.data[0].login, token: null };
+      return null;
+    }
+    if (!r.data || !r.data.token) return null;
+    setDbToken(r.data.token);
+    if (!(await checkDbIdentity())) { console.error("x-pos-token yetib bormayapti"); showToast("⚠️ Xavfsizlik tokeni ishlamayapti — 29-B SQL'ni ishga tushirmang"); }
+    return { login: r.data.login, token: r.data.token };
   }
 
   async function handleLogin(loginRaw, password) {
@@ -1137,10 +1206,10 @@ export default function BilliardPOS() {
     if (!password) { showToast("Parolni kiriting"); return; }
     // Bo'sh login + parol -> faqat bosh admin (Asliddin) uchun tezkor kirish
     if (!login && password) {
-      const quickAdmin = await supabase.rpc("verify_admin_login", { p_login: "Asliddin", p_password: password });
-      if (!quickAdmin.error && quickAdmin.data && quickAdmin.data.length > 0) {
-        setIsAdmin(true); setAdminLogin(quickAdmin.data[0].login);
-        persistSession({ userId: null, isAdmin: true, adminLogin: quickAdmin.data[0].login });
+      const qa = await tryAdminLogin("Asliddin", password);
+      if (qa) {
+        setIsAdmin(true); setAdminLogin(qa.login);
+        persistSession({ userId: null, isAdmin: true, adminLogin: qa.login, adminToken: qa.token });
         const d = await fetchAdminData();
         setUsers(d.users); setPromoCodes(d.promoCodes); setAdminAccounts(d.adminAccounts); setChatsByUser(d.chatsByUser);
         setScreen("admin");
@@ -1149,26 +1218,37 @@ export default function BilliardPOS() {
       showToast("Login va parolni kiriting");
       return;
     }
-    const adminRes = await supabase.rpc("verify_admin_login", { p_login: login, p_password: password });
-    if (!adminRes.error && adminRes.data && adminRes.data.length > 0) {
-      setIsAdmin(true); setAdminLogin(adminRes.data[0].login);
-      persistSession({ userId: null, isAdmin: true, adminLogin: adminRes.data[0].login });
+    const adm = await tryAdminLogin(login, password);
+    if (adm) {
+      setIsAdmin(true); setAdminLogin(adm.login);
+      persistSession({ userId: null, isAdmin: true, adminLogin: adm.login, adminToken: adm.token });
       const d = await fetchAdminData();
       setUsers(d.users); setPromoCodes(d.promoCodes); setAdminAccounts(d.adminAccounts); setChatsByUser(d.chatsByUser);
       setScreen("admin");
       return;
     }
-    const userRes = await supabase.rpc("verify_user_login", { p_login: login, p_password: password });
-    if (userRes.error || !userRes.data || userRes.data.length === 0) { showToast("Login yoki parol noto'g'ri"); return; }
-    let u = mapUser(userRes.data[0]);
+    let u = null; let token = null;
+    const lr = await supabase.rpc("login_user", { p_login: login, p_password: password });
+    if (lr.error && !rpcMissing(lr.error)) { console.error("login_user xatosi:", lr.error); showToast("⚠️ Yangi kirish ishlamadi (" + (lr.error.message || "xato") + ") — 29-B SQL'ni ishga tushirmang"); }
+    if (lr.error) {
+      // eski usul (patch 29-A hali ishga tushirilmagan bo'lsa)
+      const userRes = await supabase.rpc("verify_user_login", { p_login: login, p_password: password });
+      if (userRes.error || !userRes.data || userRes.data.length === 0) { showToast("Login yoki parol noto'g'ri"); return; }
+      u = mapUser(userRes.data[0]);
+      token = crypto.randomUUID();
+      await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
+    } else {
+      if (!lr.data || !lr.data.token) { showToast("Login yoki parol noto'g'ri"); return; }
+      u = mapUser(lr.data.user); token = lr.data.token;
+      setDbToken(token);
+      if (!(await checkDbIdentity())) { console.error("x-pos-token yetib bormayapti"); showToast("⚠️ Xavfsizlik tokeni ishlamayapti — 29-B SQL'ni ishga tushirmang"); }
+    }
     if (u.banned && u.banUntil && u.banUntil <= Date.now()) {
       await supabase.from("users").update({ banned: false, ban_until: null, ban_reason: "" }).eq("id", u.id);
       u = { ...u, banned: false, banUntil: null, banReason: "" };
     }
     setCurrentUser(u);
-    const token = crypto.randomUUID();
     setSessionToken(token);
-    await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     persistSession({ userId: u.id, isAdmin: false, token });
     const accessUser = await resolveAccessUser(u);
     if (u.role === "staff") setCurrentUser({ ...u, betaAccess: accessUser.betaAccess, planTier: accessUser.planTier, accountType: accessUser.accountType });
@@ -1179,6 +1259,8 @@ export default function BilliardPOS() {
   }
 
   function handleLogout() {
+    supabase.rpc("end_session").then(() => {}, () => {}); // so'rov sarlavhasi shu zahoti nusxalanadi
+    setDbToken(null);
     persistSession({ userId: null, isAdmin: false });
     setCurrentUser(null); setSessionToken(null); setIsAdmin(false); setAdminLogin(null);
     setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
@@ -1200,13 +1282,18 @@ export default function BilliardPOS() {
   }, [history, currentUser]);
 
   async function activatePromo(code) {
-    const { data } = await supabase.from("promo_codes").select("*").ilike("code", code.trim()).maybeSingle();
-    if (!data || data.used) {
-      showToast("Promokod noto'g'ri yoki ishlatilgan"); return;
+    let days = null;
+    const pr = await supabase.rpc("redeem_promo", { p_code: code.trim() });
+    if (rpcMissing(pr.error)) {
+      const { data } = await supabase.from("promo_codes").select("*").ilike("code", code.trim()).maybeSingle();
+      if (!data || data.used) { showToast("Promokod noto'g'ri yoki ishlatilgan"); return; }
+      days = data.duration_days || 30;
+      await supabase.from("promo_codes").update({ used: true, used_by: currentUser.id }).eq("code", data.code);
+    } else {
+      if (pr.error || !pr.data) { showToast("Promokod noto'g'ri yoki ishlatilgan"); return; }
+      days = Number(pr.data) || 30;
     }
-    const days = data.duration_days || 30;
     const newUntil = computeNewUntil(currentUser.subscriptionUntil, days);
-    await supabase.from("promo_codes").update({ used: true, used_by: currentUser.id }).eq("code", data.code);
     await supabase.from("users").update({ subscribed: true, subscription_until: new Date(newUntil).toISOString() }).eq("id", currentUser.id);
     setCurrentUser((u) => ({ ...u, subscribed: true, subscriptionUntil: newUntil }));
     setScreen("halls"); showToast(`Obuna faollashtirildi! ${fmtDate(newUntil)} gacha`);
@@ -1663,7 +1750,8 @@ export default function BilliardPOS() {
     await loadAdmin();
   }
   async function addAdmin(name, login, password) {
-    const { error } = await supabase.rpc("add_admin", { p_name: name, p_login: login, p_password: password });
+    let { error } = await supabase.rpc("admin_add_admin", { p_name: name, p_login: login, p_password: password });
+    if (rpcMissing(error)) ({ error } = await supabase.rpc("add_admin", { p_name: name, p_login: login, p_password: password }));
     if (error) { showToast("Xatolik: login band bo'lishi mumkin"); return; }
     await loadAdmin();
   }
@@ -1869,7 +1957,7 @@ export default function BilliardPOS() {
         />
       )}
 
-      {screen === "promos" && currentUser && currentUser.role === "owner" && (
+      {screen === "promos" && currentUser && currentUser.role === "owner" && proOn(currentUser) && (
         <PromosScreen halls={halls} promos={promos} onBack={() => setScreen("halls")} onSave={savePromo} onEnd={endPromo} onDelete={deletePromo} />
       )}
 
@@ -2126,11 +2214,15 @@ function AuthScreen({ onRegister, onLogin }) {
     if (tab !== "register" || !login.trim()) { setLoginTaken(false); return; }
     setCheckingLogin(true);
     const t = setTimeout(async () => {
-      const [u, a] = await Promise.all([
-        supabase.from("users").select("login").ilike("login", login.trim()).limit(1),
-        supabase.from("admin_accounts").select("login").ilike("login", login.trim()).limit(1),
-      ]);
-      setLoginTaken((u.data && u.data.length > 0) || (a.data && a.data.length > 0));
+      const r = await supabase.rpc("login_available", { p_login: login.trim() });
+      if (!r.error) setLoginTaken(r.data === false);
+      else {
+        const [u, a] = await Promise.all([
+          supabase.from("users").select("login").ilike("login", login.trim()).limit(1),
+          supabase.from("admin_accounts").select("login").ilike("login", login.trim()).limit(1),
+        ]);
+        setLoginTaken((u.data && u.data.length > 0) || (a.data && a.data.length > 0));
+      }
       setCheckingLogin(false);
     }, 450);
     return () => clearTimeout(t);
@@ -2447,8 +2539,8 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
       )}
 
       {user.role === "owner" && (
-        <button onClick={onPromos} style={{ background: "linear-gradient(120deg,#5a1f45,#3d1530)", border: "1px solid #ff7ab6" }} className="w-full py-3 mb-4 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
-          <Percent size={16} style={{ color: "#ff7ab6" }} /> <span style={{ color: CREAM }}>Aksiyalar</span>
+        <button onClick={proOn(user) ? onPromos : () => setProModal(true)} style={{ background: "linear-gradient(120deg,#5a1f45,#3d1530)", border: "1px solid #ff7ab6", opacity: proOn(user) ? 1 : 0.75 }} className="w-full py-3 mb-4 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
+          <Percent size={16} style={{ color: "#ff7ab6" }} /> <span style={{ color: CREAM }}>Aksiyalar</span>{!proOn(user) && <span className="text-xs">🔒</span>}
           {promos.some((p) => promoStatus(p, Date.now()) === "now") && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: "#ff7ab6", color: "#3a0820" }}>FAOL</span>}
         </button>
       )}
