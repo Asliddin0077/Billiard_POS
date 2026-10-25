@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.8.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.8.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- TIL (uz / ru) ----------------
 // Matnlar o'zbekcha yoziladi; "ru" tanlanganda ekrandagi matn lug'at bo'yicha ruschaga o'giriladi.
@@ -878,11 +878,12 @@ function mapShift(row) {
 }
 
 // ---------------- data fetch helpers ----------------
-async function fetchOwnerData(ownerId) {
+async function fetchOwnerData(ownerId, opts = {}) {
+  const withHistory = opts.history !== false;
   const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes, staffRes, salariesRes, salaryPayRes, shiftsRes, promosRes] = await Promise.all([
     supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" }),
     supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
-    supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }),
+    withHistory ? supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }) : Promise.resolve({ data: null }),
     supabase.from("chats").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("warehouse_items").select("*").eq("owner_id", ownerId).order("created_at"),
     supabase.from("warehouse_logs").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }).limit(300),
@@ -899,7 +900,7 @@ async function fetchOwnerData(ownerId) {
     halls: (hallsRes.data || []).map(mapHall),
     promos: (promosRes && !promosRes.error ? promosRes.data || [] : []).map(mapAksiya),
     bar: (barRes.data || []).map(mapBarItem),
-    history: (histRes.data || []).map(mapHistory),
+    history: withHistory ? (histRes.data || []).map(mapHistory) : null,
     chats: (chatRes.data || []).map(mapChat),
     warehouseItems: (whItemsRes.data || []).map(mapWarehouseItem),
     warehouseLogs: (whLogsRes.data || []).map(mapWarehouseLog),
@@ -949,7 +950,7 @@ export default function BilliardPOS() {
     setRefreshing(true);
     try {
       if (isAdmin) await loadAdmin();
-      else if (currentUser) await refreshOwnerData();
+      else if (currentUser) await refreshOwnerData(null, { history: true });
     } catch (e) {}
     setRefreshing(false);
     setPullDistance(0);
@@ -1101,7 +1102,8 @@ export default function BilliardPOS() {
     return () => clearInterval(interval);
   }, [currentUser, sessionToken]);
   useEffect(() => {
-    if (!anyPlaying) return;
+    return; // soniya hisoblagich endi faqat stollar ekranining o'zida (butun ilova har soniyada qayta chizilmasin)
+    // eslint-disable-next-line no-unreachable
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [anyPlaying]);
@@ -1143,17 +1145,18 @@ export default function BilliardPOS() {
   const userUnreadCount = myChat.filter((m) => m.from === "admin" && !m.readByUser).length;
   const adminUnreadUserCount = users.filter((u) => (chatsByUser[u.id] || []).some((m) => m.from === "user" && !m.readByAdmin)).length;
 
-  async function refreshOwnerData(ownerId) {
-    const od = await fetchOwnerData(ownerId || ownerIdOf(currentUser));
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
+  // Tezlik uchun: oddiy amallardan keyin (stol, bar, sklad...) butun o'yinlar tarixini qayta yuklamaymiz.
+  // Tarix faqat hisobot ekranlariga kirganda, pastga tortib yangilaganda yoki stol yopilganda yangilanadi.
+  async function refreshOwnerData(ownerId, opts = {}) {
+    const od = await fetchOwnerData(ownerId || ownerIdOf(currentUser), { history: !!opts.history });
+    setHalls(od.halls); setBar(od.bar); if (od.history) setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
   }
   // Hisobot ekranlariga (Statistika, Moliya, Sklad, Qarz) kirganda har safar bazadan yangi ma'lumot olib kelamiz —
   // shunda eskirgan holat (masalan boshqa qurilmadan qilingan o'zgarish) doim to'g'ri ko'rinadi.
   useEffect(() => {
     if (!currentUser) return;
-    if (["stats", "finance", "warehouse", "debts", "halls"].includes(screen)) {
-      refreshOwnerData();
-    }
+    if (["stats", "finance", "warehouse", "debts"].includes(screen)) refreshOwnerData(null, { history: true });
+    else if (screen === "halls") refreshOwnerData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
   async function refreshMyChat() {
@@ -1611,10 +1614,21 @@ export default function BilliardPOS() {
       }
       await supabase.from("table_extras").delete().eq("table_id", tableId);
       await supabase.from("table_laps").delete().eq("table_id", tableId);
-      await refreshOwnerData();
+      await Promise.all([refreshOwnerData(), mergeRecentHistory()]);
     } catch (e) {
       showToast(`❌ Kutilmagan xatolik: ${e && e.message ? e.message : e}`);
     }
+  }
+
+  // Faqat oxirgi o'yinlarni olib, mavjud tarixga qo'shamiz (butun tarixni qayta yuklamasdan)
+  async function mergeRecentHistory() {
+    const { data } = await supabase.from("session_history").select("*").eq("owner_id", ownerIdOf(currentUser)).order("end_time", { ascending: false }).limit(30);
+    if (!data) return;
+    const fresh = data.map(mapHistory);
+    setHistory((prev) => {
+      const ids = new Set(fresh.map((h) => h.id));
+      return [...fresh, ...(prev || []).filter((h) => !ids.has(h.id))].sort((a, b) => b.endTime - a.endTime);
+    });
   }
 
   // ---- bar ----
@@ -3642,7 +3656,15 @@ function PromosScreen({ halls, promos, onBack, onSave, onEnd, onDelete }) {
   );
 }
 
-function HallScreen({ user, hall, allHalls, bar, now, promos = [], onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtrasBatch, onAddExtraTime, onClose, onUpdateNote, onAddLap, onToast }) {
+function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtrasBatch, onAddExtraTime, onClose, onUpdateNote, onAddLap, onToast }) {
+  const [now, setNow] = useState(Date.now());
+  const hallPlaying = !!hall && hall.tables.some((t) => t.status === "playing");
+  useEffect(() => {
+    setNow(Date.now());
+    if (!hallPlaying) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [hallPlaying]);
   const [showCreate, setShowCreate] = useState(false);
   const [editTableObj, setEditTableObj] = useState(null);
   const [tName, setTName] = useState(""); const [tRate, setTRate] = useState("");
