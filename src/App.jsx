@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.8.1"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.8.2"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- TIL (uz / ru) ----------------
 // Matnlar o'zbekcha yoziladi; "ru" tanlanganda ekrandagi matn lug'at bo'yicha ruschaga o'giriladi.
@@ -878,41 +878,61 @@ function mapShift(row) {
 }
 
 // ---------------- data fetch helpers ----------------
+// Klub ma'lumotlari bo'limlarga bo'lingan: amaldan keyin faqat o'zgargan bo'lim qayta yuklanadi.
+const OWNER_PARTS = ["halls", "bar", "chats", "warehouse", "debts", "staff", "shifts", "promos"];
+
+// O'yinlar tarixi: Supabase bitta so'rovda ko'pi bilan 1000 qator beradi — shuning uchun sahifalab olamiz
+async function fetchAllHistory(ownerId) {
+  const PAGE = 1000, out = [];
+  for (let page = 0; page < 30; page++) {
+    const { data, error } = await supabase.from("session_history").select("*").eq("owner_id", ownerId)
+      .order("end_time", { ascending: false }).range(page * PAGE, page * PAGE + PAGE - 1);
+    if (error || !data) break;
+    out.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return out;
+}
+
 async function fetchOwnerData(ownerId, opts = {}) {
   const withHistory = opts.history !== false;
-  const [hallsRes, barRes, histRes, chatRes, whItemsRes, whLogsRes, debtsRes, debtPayRes, debtTopupRes, staffRes, salariesRes, salaryPayRes, shiftsRes, promosRes] = await Promise.all([
-    supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" }),
-    supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at"),
-    withHistory ? supabase.from("session_history").select("*").eq("owner_id", ownerId).order("end_time", { ascending: false }) : Promise.resolve({ data: null }),
-    supabase.from("chats").select("*").eq("owner_id", ownerId).order("created_at"),
-    supabase.from("warehouse_items").select("*").eq("owner_id", ownerId).order("created_at"),
-    supabase.from("warehouse_logs").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }).limit(300),
-    supabase.from("debts").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }),
-    supabase.from("debt_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
-    supabase.from("debt_topups").select("*").eq("owner_id", ownerId).order("added_at", { ascending: false }),
-    supabase.from("users").select("*").eq("parent_owner_id", ownerId).eq("role", "staff").order("created_at"),
-    supabase.from("staff_salaries").select("*").eq("owner_id", ownerId),
-    supabase.from("salary_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false }),
-    supabase.from("shifts").select("*").eq("owner_id", ownerId).order("opened_at", { ascending: false }).limit(60),
-    supabase.from("promotions").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }),
-  ]);
-  return {
-    halls: (hallsRes.data || []).map(mapHall),
-    promos: (promosRes && !promosRes.error ? promosRes.data || [] : []).map(mapAksiya),
-    bar: (barRes.data || []).map(mapBarItem),
-    history: withHistory ? (histRes.data || []).map(mapHistory) : null,
-    chats: (chatRes.data || []).map(mapChat),
-    warehouseItems: (whItemsRes.data || []).map(mapWarehouseItem),
-    warehouseLogs: (whLogsRes.data || []).map(mapWarehouseLog),
-    debts: (debtsRes.data || []).map(mapDebt),
-    debtPayments: (debtPayRes.data || []).map(mapDebtPayment),
-    debtTopups: (debtTopupRes.data || []).map(mapDebtTopup),
-    staffList: (staffRes.data || []).map(mapUser),
-    staffSalaries: (salariesRes.data || []).map(mapStaffSalary),
-    salaryPayments: (salaryPayRes.data || []).map(mapSalaryPayment),
-    shifts: (shiftsRes.data || []).map(mapShift),
-  };
+  const want = new Set(opts.parts || OWNER_PARTS);
+  const q = {};
+  if (want.has("halls")) q.halls = supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" });
+  if (want.has("bar")) q.bar = supabase.from("bar_items").select("*").eq("owner_id", ownerId).order("created_at");
+  if (want.has("chats")) q.chats = supabase.from("chats").select("*").eq("owner_id", ownerId).order("created_at");
+  if (want.has("warehouse")) {
+    q.whItems = supabase.from("warehouse_items").select("*").eq("owner_id", ownerId).order("created_at");
+    q.whLogs = supabase.from("warehouse_logs").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false }).limit(300);
+  }
+  if (want.has("debts")) {
+    q.debts = supabase.from("debts").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false });
+    q.debtPay = supabase.from("debt_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false });
+    q.debtTop = supabase.from("debt_topups").select("*").eq("owner_id", ownerId).order("added_at", { ascending: false });
+  }
+  if (want.has("staff")) {
+    q.staff = supabase.from("users").select("*").eq("parent_owner_id", ownerId).eq("role", "staff").order("created_at");
+    q.salaries = supabase.from("staff_salaries").select("*").eq("owner_id", ownerId);
+    q.salaryPay = supabase.from("salary_payments").select("*").eq("owner_id", ownerId).order("paid_at", { ascending: false });
+  }
+  if (want.has("shifts")) q.shifts = supabase.from("shifts").select("*").eq("owner_id", ownerId).order("opened_at", { ascending: false }).limit(60);
+  if (want.has("promos")) q.promos = supabase.from("promotions").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false });
+  const keys = Object.keys(q);
+  const [res, hist] = await Promise.all([Promise.all(keys.map((k) => q[k])), withHistory ? fetchAllHistory(ownerId) : Promise.resolve(null)]);
+  const r = {}; keys.forEach((k, i) => { r[k] = res[i]; });
+  const rows = (x) => (x && !x.error && x.data) || [];
+  const out = { history: hist ? hist.map(mapHistory) : null };
+  if (r.halls) out.halls = rows(r.halls).map(mapHall);
+  if (r.bar) out.bar = rows(r.bar).map(mapBarItem);
+  if (r.chats) out.chats = rows(r.chats).map(mapChat);
+  if (r.whItems) { out.warehouseItems = rows(r.whItems).map(mapWarehouseItem); out.warehouseLogs = rows(r.whLogs).map(mapWarehouseLog); }
+  if (r.debts) { out.debts = rows(r.debts).map(mapDebt); out.debtPayments = rows(r.debtPay).map(mapDebtPayment); out.debtTopups = rows(r.debtTop).map(mapDebtTopup); }
+  if (r.staff) { out.staffList = rows(r.staff).map(mapUser); out.staffSalaries = rows(r.salaries).map(mapStaffSalary); out.salaryPayments = rows(r.salaryPay).map(mapSalaryPayment); }
+  if (r.shifts) out.shifts = rows(r.shifts).map(mapShift);
+  if (r.promos) out.promos = rows(r.promos).map(mapAksiya);
+  return out;
 }
+
 async function fetchAdminData() {
   const [usersRes, promoRes, adminsRes, chatsRes, openShiftsRes] = await Promise.all([
     supabase.from("users").select("*").order("created_at", { ascending: false }),
@@ -944,6 +964,9 @@ export default function BilliardPOS() {
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const touchStartY = useRef(0);
+  const refreshSeq = useRef({});
+  const lastHistoryAt = useRef(0);
+  const lastOwnerLoadAt = useRef(0);
   const pulling = useRef(false);
 
   async function doRefresh() {
@@ -1072,7 +1095,7 @@ export default function BilliardPOS() {
                 setSessionToken(s.token || null);
                 if (isBanned(accessUser)) { setScreen("banned"); }
                 else {
-                  const od = await fetchOwnerData(ownerIdOf(u));
+                  const od = await fetchOwnerData(ownerIdOf(u)); lastOwnerLoadAt.current = Date.now(); lastHistoryAt.current = Date.now();
                   setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
                   setScreen(canAccess(accessUser) ? "halls" : "subscribe");
                 }
@@ -1148,15 +1171,35 @@ export default function BilliardPOS() {
   // Tezlik uchun: oddiy amallardan keyin (stol, bar, sklad...) butun o'yinlar tarixini qayta yuklamaymiz.
   // Tarix faqat hisobot ekranlariga kirganda, pastga tortib yangilaganda yoki stol yopilganda yangilanadi.
   async function refreshOwnerData(ownerId, opts = {}) {
-    const od = await fetchOwnerData(ownerId || ownerIdOf(currentUser), { history: !!opts.history });
-    setHalls(od.halls); setBar(od.bar); if (od.history) setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
+    // Faqat kerakli bo'limlar yuklanadi (opts.parts). Har bo'limning o'z navbat raqami bor:
+    // kechikib kelgan eski javob yangiroq ma'lumotni bosib ketmaydi.
+    const parts = opts.parts || OWNER_PARTS;
+    const mySeq = {};
+    parts.forEach((p) => { mySeq[p] = (refreshSeq.current[p] || 0) + 1; refreshSeq.current[p] = mySeq[p]; });
+    if (opts.history) { mySeq.history = (refreshSeq.current.history || 0) + 1; refreshSeq.current.history = mySeq.history; }
+    const od = await fetchOwnerData(ownerId || ownerIdOf(currentUser), { history: !!opts.history, parts });
+    const fresh = (p) => mySeq[p] === refreshSeq.current[p];
+    if (od.history && fresh("history")) setHistory(od.history);
+    if (od.halls && fresh("halls")) setHalls(od.halls);
+    if (od.bar && fresh("bar")) setBar(od.bar);
+    if (od.chats && fresh("chats")) setMyChat(od.chats);
+    if (od.warehouseItems && fresh("warehouse")) { setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); }
+    if (od.debts && fresh("debts")) { setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); }
+    if (od.staffList && fresh("staff")) { setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); }
+    if (od.shifts && fresh("shifts")) setShifts(od.shifts);
+    if (od.promos && fresh("promos")) setPromos(od.promos);
   }
   // Hisobot ekranlariga (Statistika, Moliya, Sklad, Qarz) kirganda har safar bazadan yangi ma'lumot olib kelamiz —
   // shunda eskirgan holat (masalan boshqa qurilmadan qilingan o'zgarish) doim to'g'ri ko'rinadi.
   useEffect(() => {
     if (!currentUser) return;
-    if (["stats", "finance", "warehouse", "debts"].includes(screen)) refreshOwnerData(null, { history: true });
-    else if (screen === "halls") refreshOwnerData();
+    if (["stats", "finance", "warehouse", "debts"].includes(screen)) {
+      // Butun tarixni 1 daqiqada ko'pi bilan bir marta yuklaymiz (stol yopilganda oxirgilari baribir qo'shiladi)
+      const needHistory = Date.now() - lastHistoryAt.current > 60000;
+      if (needHistory) lastHistoryAt.current = Date.now();
+      refreshOwnerData(null, { history: needHistory });
+    }
+    else if (screen === "halls" && Date.now() - lastOwnerLoadAt.current > 15000) { lastOwnerLoadAt.current = Date.now(); refreshOwnerData(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
   async function refreshMyChat() {
@@ -1256,7 +1299,7 @@ export default function BilliardPOS() {
     const accessUser = await resolveAccessUser(u);
     if (u.role === "staff") setCurrentUser({ ...u, betaAccess: accessUser.betaAccess, planTier: accessUser.planTier, accountType: accessUser.accountType });
     if (isBanned(accessUser)) { setScreen("banned"); return; }
-    const od = await fetchOwnerData(ownerIdOf(u));
+    const od = await fetchOwnerData(ownerIdOf(u)); lastOwnerLoadAt.current = Date.now(); lastHistoryAt.current = Date.now();
     setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
     setScreen(canAccess(accessUser) ? "halls" : "subscribe");
   }
@@ -1313,16 +1356,16 @@ export default function BilliardPOS() {
   // To'lov endi Telegram bot orqali (@Billiard_pos_bot) - admin qo'lda faollashtiradi
 
   // ---- halls/tables ----
-  async function createHall(name) { await supabase.from("halls").insert({ owner_id: ownerIdOf(currentUser), name }); await refreshOwnerData(); }
-  async function renameHall(hallId, name) { await supabase.from("halls").update({ name }).eq("id", hallId); await refreshOwnerData(); }
-  async function deleteHall(hallId) { await supabase.from("halls").delete().eq("id", hallId); await refreshOwnerData(); }
+  async function createHall(name) { await supabase.from("halls").insert({ owner_id: ownerIdOf(currentUser), name }); await refreshOwnerData(null, { parts: ["halls"] }); }
+  async function renameHall(hallId, name) { await supabase.from("halls").update({ name }).eq("id", hallId); await refreshOwnerData(null, { parts: ["halls"] }); }
+  async function deleteHall(hallId) { await supabase.from("halls").delete().eq("id", hallId); await refreshOwnerData(null, { parts: ["halls"] }); }
   async function createTable(hallId, name, rate) {
     const hall = halls.find((h) => h.id === hallId);
     const nextPos = hall ? hall.tables.length : 0;
     await supabase.from("billiard_tables").insert({ hall_id: hallId, name, rate, status: "free", position: nextPos });
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["halls"] });
   }
-  async function editTable(hallId, tableId, name, rate) { await supabase.from("billiard_tables").update({ name, rate }).eq("id", tableId); await refreshOwnerData(); }
+  async function editTable(hallId, tableId, name, rate) { await supabase.from("billiard_tables").update({ name, rate }).eq("id", tableId); await refreshOwnerData(null, { parts: ["halls"] }); }
   async function savePromo(f) {
     const payload = {
       owner_id: ownerIdOf(currentUser), name: (f.name || "Aksiya").trim(), price: Number(f.price),
@@ -1332,19 +1375,19 @@ export default function BilliardPOS() {
     const r = f.id ? await supabase.from("promotions").update(payload).eq("id", f.id) : await supabase.from("promotions").insert(payload);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return false; }
     showToast(f.id ? "✅ Aksiya yangilandi" : "🔥 Aksiya qo'shildi");
-    await refreshOwnerData(); return true;
+    await refreshOwnerData(null, { parts: ["promos"] }); return true;
   }
   async function endPromo(id) {
     const r = await supabase.from("promotions").update({ ended_at: new Date().toISOString() }).eq("id", id);
     if (r.error) showToast(`❌ Xatolik: ${r.error.message}`); else showToast("Aksiya to'xtatildi");
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["promos"] });
   }
   async function deletePromo(id) {
     const r = await supabase.from("promotions").delete().eq("id", id);
     if (r.error) showToast(`❌ Xatolik: ${r.error.message}`); else showToast("Aksiya o'chirildi");
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["promos"] });
   }
-  async function deleteTable(hallId, tableId) { await supabase.from("billiard_tables").delete().eq("id", tableId); await refreshOwnerData(); }
+  async function deleteTable(hallId, tableId) { await supabase.from("billiard_tables").delete().eq("id", tableId); await refreshOwnerData(null, { parts: ["halls"] }); }
   async function startTable(hallId, tableId, targetSeconds, prepaidAmount) {
     await supabase.from("table_extras").delete().eq("table_id", tableId);
     await supabase.from("table_laps").delete().eq("table_id", tableId);
@@ -1354,13 +1397,13 @@ export default function BilliardPOS() {
       paused_at: null, paused_seconds: 0, pause_log: [],
       started_by_name: currentUser.name,
     }).eq("id", tableId);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function pauseTable(hallId, tableId) {
     await supabase.from("billiard_tables").update({
       status: "paused", paused_at: new Date().toISOString(),
     }).eq("id", tableId);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function resumeTable(hallId, tableId) {
     const hall = halls.find((h) => h.id === hallId);
@@ -1373,7 +1416,7 @@ export default function BilliardPOS() {
       paused_seconds: (table.pausedSeconds || 0) + addedPause,
       pause_log: [...(table.pauseLog || []), [table.pausedAt, resumedAt]],
     }).eq("id", tableId);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function transferTable(sourceHallId, sourceTableId, destHallId, destTableId) {
     const sourceHall = halls.find((h) => h.id === sourceHallId);
@@ -1391,7 +1434,7 @@ export default function BilliardPOS() {
       status: "free", start_time: null, note: null, target_seconds: null, prepaid_amount: null,
       paused_at: null, paused_seconds: 0, pause_log: [],
     }).eq("id", sourceTableId);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function addExtraTime(hallId, tableId, minutes) {
     const hall = halls.find((h) => h.id === hallId);
@@ -1401,7 +1444,7 @@ export default function BilliardPOS() {
     if (mins <= 0) return;
     const newStart = table.startTime - mins * 60000;
     await supabase.from("billiard_tables").update({ start_time: new Date(newStart).toISOString() }).eq("id", tableId);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function addExtra(hallId, tableId, extra) {
     if (extra.barItemId && currentUser && proOn(currentUser)) {
@@ -1417,15 +1460,17 @@ export default function BilliardPOS() {
         note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
       });
     } else {
-      await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
+      const r = await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
+      if (r.error) { showToast(`❌ Qo'shilmadi: ${r.error.message}`); return false; }
     }
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["halls", "warehouse"] });
     return true;
   }
   async function addExtrasBatch(hallId, tableId, items) {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
     const tableLabel = hall && table ? `${hall.name} · ${table.name}` : "stolga sotildi";
+    const rows = []; const stockOps = [];
     for (const item of items) {
       if (!item || item.qty <= 0) continue;
       const barItem = item.barItemId ? bar.find((b) => b.id === item.barItemId) : null;
@@ -1436,20 +1481,33 @@ export default function BilliardPOS() {
           showToast(`❌ Skladda "${item.name}" yetarli emas (${wi ? wi.units : 0} dona bor)`);
           continue;
         }
-        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price, cost_price: costPrice }));
-        await supabase.from("table_extras").insert(rows);
-        await supabase.from("warehouse_items").update({ units_in_stock: wi.units - item.qty }).eq("id", wi.id);
-        await supabase.from("warehouse_logs").insert({
-          warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -item.qty, type: "sale",
-          cost_price: costPrice, sell_price: item.price, note: tableLabel, entry_date: new Date().toISOString().slice(0, 10),
-          actor_id: currentUser.id, actor_name: currentUser.name,
-        });
-      } else {
-        const rows = Array.from({ length: item.qty }, () => ({ table_id: tableId, name: item.name, price: item.price, cost_price: costPrice }));
-        await supabase.from("table_extras").insert(rows);
+        stockOps.push({ wi, item, costPrice });
       }
+      for (let i = 0; i < item.qty; i++) rows.push({ table_id: tableId, name: item.name, price: item.price, cost_price: costPrice });
     }
-    await refreshOwnerData();
+    if (!rows.length) return { ok: false };
+    // Hammasi BITTA so'rovda yoziladi — yarim-yorti qo'shilib qolmaydi
+    const ins = await supabase.from("table_extras").insert(rows).select();
+    if (ins.error) {
+      showToast(`❌ Qo'shilmadi: ${ins.error.message}. Qayta urinib ko'ring`);
+      return { ok: false };
+    }
+    // Ekranda darhol ko'rinsin (bazadan qayta yuklashni kutmasdan)
+    const added = (ins.data || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price), costPrice: Number(e.cost_price || 0) }));
+    setHalls((hs) => hs.map((h) => h.id !== hallId ? h : { ...h, tables: h.tables.map((t) => t.id !== tableId ? t : { ...t, extras: [...t.extras, ...added] }) }));
+    // Sklad: bazadagi eng so'nggi qoldiqdan ayiramiz
+    await Promise.all(stockOps.map(async ({ wi, item, costPrice }) => {
+      const cur = await supabase.from("warehouse_items").select("units_in_stock").eq("id", wi.id).single();
+      const units = cur.data ? Number(cur.data.units_in_stock) : wi.units;
+      await supabase.from("warehouse_items").update({ units_in_stock: units - item.qty }).eq("id", wi.id);
+      await supabase.from("warehouse_logs").insert({
+        warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -item.qty, type: "sale",
+        cost_price: costPrice, sell_price: item.price, note: tableLabel, entry_date: new Date().toISOString().slice(0, 10),
+        actor_id: currentUser.id, actor_name: currentUser.name,
+      });
+    }));
+    refreshOwnerData(null, { parts: ["halls", "warehouse"] }); // fonda — oynani kutib turmaydi
+    return { ok: true };
   }
   async function addStock(barItemId, name, blocks, unitsPerBlock, entryDate, note) {
     const units = (Number(blocks) || 0) * (Number(unitsPerBlock) || 0);
@@ -1470,11 +1528,11 @@ export default function BilliardPOS() {
       actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["warehouse"] });
   }
   async function setLowStockThreshold(warehouseItemId, threshold) {
     await supabase.from("warehouse_items").update({ low_stock_threshold: Number(threshold) || 0 }).eq("id", warehouseItemId);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["warehouse"] });
   }
   async function removeStock(warehouseItemId, blocks, unitsPerBlock, note) {
     const wi = warehouseItems.find((w) => w.id === warehouseItemId);
@@ -1489,7 +1547,7 @@ export default function BilliardPOS() {
       actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["warehouse"] });
   }
   async function sellDirect(warehouseItemId, quantity, note, paymentMethod) {
     const wi = warehouseItems.find((w) => w.id === warehouseItemId);
@@ -1507,7 +1565,7 @@ export default function BilliardPOS() {
       actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["warehouse", "debts"] });
   }
   async function addDebt(name, phone, amount, debtDate, dueDate, note) {
     const r = await supabase.from("debts").insert({
@@ -1516,7 +1574,7 @@ export default function BilliardPOS() {
       actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["debts"] });
   }
   async function payDebt(debtId, payAmount, paymentMethod) {
     const d = debts.find((x) => x.id === debtId);
@@ -1535,7 +1593,7 @@ export default function BilliardPOS() {
       actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["debts"] });
   }
   async function addToDebt(debtId, amount, note) {
     const d = debts.find((x) => x.id === debtId);
@@ -1552,11 +1610,11 @@ export default function BilliardPOS() {
       actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["debts"] });
   }
   async function updateTableNote(hallId, tableId, note) {
     await supabase.from("billiard_tables").update({ note }).eq("id", tableId);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function addLap(hallId, tableId, comment) {
     const hall = halls.find((h) => h.id === hallId);
@@ -1569,7 +1627,7 @@ export default function BilliardPOS() {
       table_id: tableId, lap_start: new Date(lastEnd).toISOString(), lap_end: new Date(now2).toISOString(),
       duration_seconds: durationSeconds, comment: comment || null,
     });
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function closeTable(hallId, tableId, record, paymentMethod) {
     try {
@@ -1584,7 +1642,7 @@ export default function BilliardPOS() {
       if (flip.error) { showToast(`❌ Xatolik: ${flip.error.message}`); return; }
       if (!flip.data || flip.data.length === 0) {
         showToast(`⚠️ Bu stol allaqachon yopilgan`);
-        await refreshOwnerData();
+        await refreshOwnerData(null, { parts: ["halls", "warehouse", "debts"] });
         return;
       }
 
@@ -1609,12 +1667,14 @@ export default function BilliardPOS() {
       });
       if (histRes.error) {
         showToast(`❌ STOL BO'SHADI, LEKIN HISOBOTGA YOZILMADI: ${histRes.error.message} — DARHOL XABAR BERING, summa: ${fmtMoney(record.total)}`);
-        await refreshOwnerData();
+        await refreshOwnerData(null, { parts: ["halls", "warehouse", "debts"] });
         return; // extras/laps ni o'chirmaymiz — tiklash imkoni qolsin
       }
-      await supabase.from("table_extras").delete().eq("table_id", tableId);
-      await supabase.from("table_laps").delete().eq("table_id", tableId);
-      await Promise.all([refreshOwnerData(), mergeRecentHistory()]);
+      await Promise.all([
+        supabase.from("table_extras").delete().eq("table_id", tableId),
+        supabase.from("table_laps").delete().eq("table_id", tableId),
+      ]);
+      await Promise.all([refreshOwnerData(null, { parts: ["halls", "warehouse", "debts"] }), mergeRecentHistory()]);
     } catch (e) {
       showToast(`❌ Kutilmagan xatolik: ${e && e.message ? e.message : e}`);
     }
@@ -1634,13 +1694,13 @@ export default function BilliardPOS() {
   // ---- bar ----
   async function addMenuItem(name, price, costPrice) {
     await supabase.from("bar_items").insert({ owner_id: ownerIdOf(currentUser), name, price, cost_price: Number(costPrice) || 0, emoji: guessEmoji(name), color: colorFor(name) });
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["bar", "warehouse"] });
   }
   async function updateMenuItemCost(itemId, costPrice) {
     await supabase.from("bar_items").update({ cost_price: Number(costPrice) || 0 }).eq("id", itemId);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["bar"] });
   }
-  async function deleteMenuItem(itemId) { await supabase.from("bar_items").delete().eq("id", itemId); await refreshOwnerData(); }
+  async function deleteMenuItem(itemId) { await supabase.from("bar_items").delete().eq("id", itemId); await refreshOwnerData(null, { parts: ["bar", "warehouse"] }); }
 
   // ---- chat (user side) ----
   async function sendUserMessage(text) {
@@ -1799,11 +1859,11 @@ export default function BilliardPOS() {
     const { error } = await supabase.rpc("register_staff", { p_owner_id: currentUser.id, p_name: name.trim(), p_phone: normPhone, p_login: login.trim(), p_password: password });
     if (error) { showToast(error.message.includes("LOGIN_TAKEN") ? "Bu login band" : `❌ ${error.message}`); return; }
     showToast(`✅ ${name} uchun akaunt yaratildi`);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["staff"] });
   }
   async function deleteStaffAccount(staffId) {
     await supabase.from("users").delete().eq("id", staffId);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["staff"] });
   }
   async function setStaffSalary(staffId, amount, payDay) {
     const existing = staffSalaries.find((s) => s.staffId === staffId);
@@ -1812,7 +1872,7 @@ export default function BilliardPOS() {
     } else {
       await supabase.from("staff_salaries").insert({ owner_id: currentUser.id, staff_id: staffId, amount: Number(amount), pay_day: Number(payDay) });
     }
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["staff"] });
   }
   async function markSalaryPaid(salaryId, staffId, period, amount) {
     const r = await supabase.from("salary_payments").insert({
@@ -1821,7 +1881,7 @@ export default function BilliardPOS() {
     });
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     showToast(`✅ Oylik berildi deb belgilandi`);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["staff"] });
   }
   // ---- smena ----
   async function openShift() {
@@ -1830,7 +1890,7 @@ export default function BilliardPOS() {
     });
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     showToast(`✅ Smena ochildi`);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["shifts"] });
   }
   async function closeShift(shiftId) {
     const r = await supabase.from("shifts").update({
@@ -1838,7 +1898,7 @@ export default function BilliardPOS() {
     }).eq("id", shiftId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     showToast(`✅ Smena yopildi`);
-    await refreshOwnerData();
+    await refreshOwnerData(null, { parts: ["shifts"] });
   }
   async function changeAdminPassword(oldPass, newPass) {
     if (newPass.length < 8) { showToast("Yangi parol kamida 8 belgi bo'lishi kerak"); return; }
@@ -3941,7 +4001,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
       )}
 
       {activeTable && (
-        <Modal onClose={() => { setActiveTable(null); setSearch(""); setCart({}); }}>
+        <Modal onClose={addingCart ? null : () => { setActiveTable(null); setSearch(""); setCart({}); }}>
           <h2 className="font-display text-lg font-semibold mb-3" style={{ color: CREAM }}>{activeTable.name} — mahsulot qo'shish</h2>
           <div className="relative mb-3">
             <Search size={14} style={{ color: "#8fa398" }} className="absolute left-3 top-1/2 -translate-y-1/2" />
@@ -3996,10 +4056,13 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
                 const b = bar.find((x) => x.id === id);
                 return b ? { barItemId: b.id, name: b.name, price: b.price, qty } : null;
               }).filter(Boolean);
-              await onAddExtrasBatch(activeTable.id, items);
+              let res = null;
+              try { res = await onAddExtrasBatch(activeTable.id, items); } catch (err) { res = { ok: false }; onToast(`❌ Xatolik: ${err && err.message ? err.message : "aloqa"} — qayta urinib ko'ring`); }
               setAddingCart(false);
-              setActiveTable(null); setSearch(""); setCart({});
-              onToast(`✅ Mahsulotlar qo'shildi`);
+              if (res && res.ok) {
+                setActiveTable(null); setSearch(""); setCart({});
+                onToast(`✅ Mahsulotlar qo'shildi`);
+              }
             }}
             className="w-full py-3 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40" style={{ background: GOLD, color: FELT_DARK }}>
             {addingCart ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} OK
