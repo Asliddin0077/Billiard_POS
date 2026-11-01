@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.8.2"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.8.3"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- TIL (uz / ru) ----------------
 // Matnlar o'zbekcha yoziladi; "ru" tanlanganda ekrandagi matn lug'at bo'yicha ruschaga o'giriladi.
@@ -1041,6 +1041,18 @@ export default function BilliardPOS() {
   const [viewUserLoading, setViewUserLoading] = useState(false);
 
   function showToast(msg) { setToast(msg); }
+  // Internet uzilganini aniq aytamiz
+  function errText(e) {
+    const m = (e && e.message) ? e.message : String(e || "");
+    if (/failed to fetch|network|load failed|fetch/i.test(m) || (typeof navigator !== "undefined" && navigator.onLine === false)) return "internet yo'q";
+    return m;
+  }
+  function tableNameOf(hallId, tableId) {
+    const h = halls.find((x) => x.id === hallId);
+    const t = h && h.tables.find((x) => x.id === tableId);
+    return t ? t.name : "Stol";
+  }
+  function buzz() { try { navigator.vibrate && navigator.vibrate(60); } catch (_) {} }
   function persistSession(s) { try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (e) {} }
 
   // ---- initial session restore ----
@@ -1161,7 +1173,8 @@ export default function BilliardPOS() {
   }
   useEffect(() => {
     if (!toast) return;
-    const id = setTimeout(() => setToast(null), 2400);
+    const bad = /^(❌|⚠️)/.test(String(toast));
+    const id = setTimeout(() => setToast(null), bad ? 6000 : 3000);
     return () => clearTimeout(id);
   }, [toast]);
 
@@ -1389,20 +1402,36 @@ export default function BilliardPOS() {
   }
   async function deleteTable(hallId, tableId) { await supabase.from("billiard_tables").delete().eq("id", tableId); await refreshOwnerData(null, { parts: ["halls"] }); }
   async function startTable(hallId, tableId, targetSeconds, prepaidAmount) {
-    await supabase.from("table_extras").delete().eq("table_id", tableId);
-    await supabase.from("table_laps").delete().eq("table_id", tableId);
-    await supabase.from("billiard_tables").update({
-      status: "playing", start_time: new Date().toISOString(), note: null,
-      target_seconds: targetSeconds || null, prepaid_amount: prepaidAmount || null,
-      paused_at: null, paused_seconds: 0, pause_log: [],
-      started_by_name: currentUser.name,
-    }).eq("id", tableId);
+    const nm = tableNameOf(hallId, tableId);
+    try {
+      const r = await supabase.from("billiard_tables").update({
+        status: "playing", start_time: new Date().toISOString(), note: null,
+        target_seconds: targetSeconds || null, prepaid_amount: prepaidAmount || null,
+        paused_at: null, paused_seconds: 0, pause_log: [],
+        started_by_name: currentUser.name,
+      }).eq("id", tableId).eq("status", "free").select("id");
+      if (r.error) { showToast(`❌ "${nm}" OCHILMADI (${errText(r.error)}) — qayta urinib ko'ring`); return; }
+      if (!r.data || r.data.length === 0) { showToast(`⚠️ "${nm}" allaqachon ochilgan`); }
+      else {
+        // eski qoldiqlarni faqat stol haqiqatan ochilgandan keyin tozalaymiz (boshqa qurilma ochgan stolni buzmaslik uchun)
+        await Promise.all([
+          supabase.from("table_extras").delete().eq("table_id", tableId),
+          supabase.from("table_laps").delete().eq("table_id", tableId),
+        ]);
+        buzz(); showToast(`🟢 "${nm}" ochildi · ${fmtTime(new Date())}`);
+      }
+    } catch (e) { showToast(`❌ "${nm}" OCHILMADI (${errText(e)}) — qayta urinib ko'ring`); }
     await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function pauseTable(hallId, tableId) {
-    await supabase.from("billiard_tables").update({
-      status: "paused", paused_at: new Date().toISOString(),
-    }).eq("id", tableId);
+    const nm = tableNameOf(hallId, tableId);
+    try {
+      const r = await supabase.from("billiard_tables").update({
+        status: "paused", paused_at: new Date().toISOString(),
+      }).eq("id", tableId).select("id");
+      if (r.error) showToast(`❌ "${nm}" pauzaga qo'yilmadi (${errText(r.error)})`);
+      else showToast(`⏸ "${nm}" pauzada`);
+    } catch (e) { showToast(`❌ "${nm}" pauzaga qo'yilmadi (${errText(e)})`); }
     await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function resumeTable(hallId, tableId) {
@@ -1411,39 +1440,59 @@ export default function BilliardPOS() {
     if (!table || !table.pausedAt) return;
     const resumedAt = Date.now();
     const addedPause = (resumedAt - table.pausedAt) / 1000;
-    await supabase.from("billiard_tables").update({
-      status: "playing", paused_at: null,
-      paused_seconds: (table.pausedSeconds || 0) + addedPause,
-      pause_log: [...(table.pauseLog || []), [table.pausedAt, resumedAt]],
-    }).eq("id", tableId);
+    try {
+      const r = await supabase.from("billiard_tables").update({
+        status: "playing", paused_at: null,
+        paused_seconds: (table.pausedSeconds || 0) + addedPause,
+        pause_log: [...(table.pauseLog || []), [table.pausedAt, resumedAt]],
+      }).eq("id", tableId).select("id");
+      if (r.error) showToast(`❌ "${table.name}" davom ettirilmadi (${errText(r.error)})`);
+      else showToast(`▶️ "${table.name}" davom etyapti`);
+    } catch (e) { showToast(`❌ "${table.name}" davom ettirilmadi (${errText(e)})`); }
     await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function transferTable(sourceHallId, sourceTableId, destHallId, destTableId) {
     const sourceHall = halls.find((h) => h.id === sourceHallId);
     const source = sourceHall && sourceHall.tables.find((t) => t.id === sourceTableId);
     if (!source || !destTableId) return;
-    await supabase.from("billiard_tables").update({
+    try {
+    const r1 = await supabase.from("billiard_tables").update({
       status: source.status, start_time: source.startTime ? new Date(source.startTime).toISOString() : null,
       note: source.note || null, target_seconds: source.targetSeconds, prepaid_amount: source.prepaidAmount,
       paused_at: source.pausedAt ? new Date(source.pausedAt).toISOString() : null, paused_seconds: source.pausedSeconds || 0,
       pause_log: source.pauseLog || [],
     }).eq("id", destTableId);
+    if (r1.error) { showToast(`❌ "${source.name}" ko'chirilmadi (${errText(r1.error)})`); await refreshOwnerData(null, { parts: ["halls"] }); return; }
     await supabase.from("table_extras").update({ table_id: destTableId }).eq("table_id", sourceTableId);
     await supabase.from("table_laps").update({ table_id: destTableId }).eq("table_id", sourceTableId);
-    await supabase.from("billiard_tables").update({
+    const r2 = await supabase.from("billiard_tables").update({
       status: "free", start_time: null, note: null, target_seconds: null, prepaid_amount: null,
       paused_at: null, paused_seconds: 0, pause_log: [],
     }).eq("id", sourceTableId);
+    if (r2.error) showToast(`⚠️ "${source.name}" ko'chdi, lekin eski stol bo'shamadi — sahifani yangilang`);
+    else showToast(`✅ "${source.name}" → "${tableNameOf(destHallId, destTableId)}" ko'chirildi`);
+    } catch (e) { showToast(`❌ "${source.name}" ko'chirilmadi (${errText(e)})`); }
     await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function addExtraTime(hallId, tableId, minutes) {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
     if (!table || !table.startTime) return;
-    const mins = Number(minutes) || 0;
-    if (mins <= 0) return;
+    const mins = Number(minutes) || 0; // musbat — qo'shish, manfiy — ayirish
+    if (!mins) return;
+    if (mins < 0) {
+      const refEnd = table.status === "paused" && table.pausedAt ? table.pausedAt : Date.now();
+      const elapsedMin = ((refEnd - table.startTime) / 1000 - (table.pausedSeconds || 0)) / 60;
+      if (-mins > elapsedMin) { showToast(`❌ "${table.name}"da hozircha ${Math.floor(elapsedMin)} daqiqa bor — undan ko'p ayirib bo'lmaydi`); return; }
+      const firstLap = (table.laps || []).length ? Math.min(...table.laps.map((l) => l.start)) : null;
+      if (firstLap != null && table.startTime - mins * 60000 > firstLap) { showToast(`❌ "${table.name}"da raundlar bor — bunchalik ayirib bo'lmaydi`); return; }
+    }
     const newStart = table.startTime - mins * 60000;
-    await supabase.from("billiard_tables").update({ start_time: new Date(newStart).toISOString() }).eq("id", tableId);
+    try {
+      const r = await supabase.from("billiard_tables").update({ start_time: new Date(newStart).toISOString() }).eq("id", tableId).select("id");
+      if (r.error) showToast(`❌ Vaqt o'zgarmadi (${errText(r.error)})`);
+      else showToast(mins > 0 ? `✅ "${table.name}"ga ${mins} daqiqa qo'shildi` : `✅ "${table.name}"dan ${-mins} daqiqa ayirildi`);
+    } catch (e) { showToast(`❌ Vaqt o'zgarmadi (${errText(e)})`); }
     await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function addExtra(hallId, tableId, extra) {
@@ -1633,17 +1682,17 @@ export default function BilliardPOS() {
     try {
       const hall = halls.find((h) => h.id === hallId);
       const table = hall && hall.tables.find((t) => t.id === tableId);
-      if (!table) { showToast(`❌ Stol topilmadi, sahifani yangilang`); return; }
+      if (!table) { showToast(`❌ Stol topilmadi, sahifani yangilang`); return true; }
 
       // Avval atomik ravishda stolni "bo'sh" qilamiz — faqat hali "bo'sh" bo'lmagan bo'lsa.
       // Ikki qurilma bir vaqtda bossa, faqat BITTASI muvaffaqiyatli bo'ladi (boshqasi 0 qator qaytaradi).
       const flip = await supabase.from("billiard_tables").update({ status: "free", start_time: null, note: null })
         .eq("id", tableId).neq("status", "free").select();
-      if (flip.error) { showToast(`❌ Xatolik: ${flip.error.message}`); return; }
+      if (flip.error) { showToast(`❌ "${table.name}" YOPILMADI (${errText(flip.error)}) — internetni tekshirib, qayta bosing`); return false; }
       if (!flip.data || flip.data.length === 0) {
-        showToast(`⚠️ Bu stol allaqachon yopilgan`);
+        showToast(`⚠️ "${table.name}" allaqachon yopilgan`);
         await refreshOwnerData(null, { parts: ["halls", "warehouse", "debts"] });
-        return;
+        return true;
       }
 
       const existingLaps = table.laps;
@@ -1668,15 +1717,18 @@ export default function BilliardPOS() {
       if (histRes.error) {
         showToast(`❌ STOL BO'SHADI, LEKIN HISOBOTGA YOZILMADI: ${histRes.error.message} — DARHOL XABAR BERING, summa: ${fmtMoney(record.total)}`);
         await refreshOwnerData(null, { parts: ["halls", "warehouse", "debts"] });
-        return; // extras/laps ni o'chirmaymiz — tiklash imkoni qolsin
+        return true; // extras/laps ni o'chirmaymiz — tiklash imkoni qolsin
       }
+      buzz(); showToast(`🔴 "${table.name}" yopildi · ${fmtMoney(record.total)} · ${fmtTime(new Date())}`);
       await Promise.all([
         supabase.from("table_extras").delete().eq("table_id", tableId),
         supabase.from("table_laps").delete().eq("table_id", tableId),
       ]);
       await Promise.all([refreshOwnerData(null, { parts: ["halls", "warehouse", "debts"] }), mergeRecentHistory()]);
+      return true;
     } catch (e) {
-      showToast(`❌ Kutilmagan xatolik: ${e && e.message ? e.message : e}`);
+      showToast(`❌ Stol YOPILMADI (${errText(e)}) — qayta bosing`);
+      return false;
     }
   }
 
@@ -1944,7 +1996,7 @@ export default function BilliardPOS() {
       )}
 
       {toast && (
-        <div style={{ background: GOLD, color: FELT_DARK, top: "calc(var(--safe-top) + 16px)" }}
+        <div onClick={() => setToast(null)} style={{ background: /^❌/.test(String(toast)) ? "#c0392b" : /^⚠️/.test(String(toast)) ? "#d19a4f" : GOLD, color: /^❌/.test(String(toast)) ? "#fff" : FELT_DARK, top: "calc(var(--safe-top) + 16px)" }}
           className="fixed left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-full text-sm font-medium shadow-lg font-display max-w-[90vw] text-center">
           {toast}
         </div>
@@ -3750,6 +3802,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
   const [extraTimeTable, setExtraTimeTable] = useState(null);
   const [viewTable, setViewTable] = useState(null);
   const [extraMinutes, setExtraMinutes] = useState("");
+  const [extraMode, setExtraMode] = useState("add");
 
   function playAlertSound() {
     try {
@@ -3854,7 +3907,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
                     <div className="font-mono text-lg font-semibold" style={{ color: paused ? "#d19a4f" : GOLD }}>
                       {fmtDuration(elapsedSeconds(t))} {paused && <span className="text-xs font-sans opacity-70">(pauzada)</span>}
                     </div>
-                    <button type="button" onClick={() => { setExtraTimeTable(t); setExtraMinutes(""); }} title="Qo'shimcha vaqt qo'shish"
+                    <button type="button" onClick={() => { setExtraTimeTable(t); setExtraMinutes(""); setExtraMode("add"); }} title="Vaqt qo'shish / ayirish"
                       className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "#b8c9bf" }}>
                       <Plus size={11} />
                     </button>
@@ -4127,17 +4180,35 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
 
       {extraTimeTable && (
         <Modal onClose={() => setExtraTimeTable(null)}>
-          <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{extraTimeTable.name}"ga vaqt qo'shish</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Masalan band bo'lib vaqtida ochishga ulgurmagan bo'lsangiz — necha daqiqa o'tganini kiriting, hisoblagichga shuncha qo'shiladi.</p>
-          <div className="mb-4">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha daqiqa qo'shilsin</label>
-            <input type="number" value={extraMinutes} onChange={(e) => setExtraMinutes(e.target.value)} placeholder="masalan 15"
+          <h2 className="font-display text-lg font-semibold mb-3" style={{ color: CREAM }}>"{extraTimeTable.name}" — vaqtni tuzatish</h2>
+          <div className="grid grid-cols-2 gap-1.5 mb-3">
+            {[["add", "+ Qo'shish"], ["sub", "− Ayirish"]].map(([val, label]) => (
+              <button key={val} type="button" onClick={() => setExtraMode(val)}
+                className="py-2.5 rounded-lg text-sm font-semibold" style={{ background: extraMode === val ? (val === "add" ? GOLD : "#d19a4f") : FELT_DARK, color: extraMode === val ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>
+            {extraMode === "add"
+              ? "Masalan band bo'lib vaqtida ochishga ulgurmagan bo'lsangiz — necha daqiqa o'tganini kiriting, hisoblagichga shuncha qo'shiladi."
+              : "Masalan stolni oldinroq ochib qo'ygan bo'lsangiz yoki ortiqcha qo'shilgan bo'lsa — necha daqiqa ayirish kerakligini kiriting."}
+          </p>
+          <div className="mb-3">
+            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>{extraMode === "add" ? "Necha daqiqa qo'shilsin" : "Necha daqiqa ayirilsin"}</label>
+            <input type="number" inputMode="numeric" value={extraMinutes} onChange={(e) => setExtraMinutes(e.target.value)} placeholder="masalan 15"
               className="w-full px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
+          <div className="flex gap-1.5 mb-4">
+            {[5, 10, 15, 30].map((m) => (
+              <button key={m} type="button" onClick={() => setExtraMinutes(String(m))}
+                className="flex-1 py-2 rounded-lg text-xs font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>{m} daq</button>
+            ))}
+          </div>
           <button disabled={!extraMinutes || Number(extraMinutes) <= 0}
-            onClick={() => { onAddExtraTime(extraTimeTable.id, extraMinutes); onToast(`✅ ${extraMinutes} daqiqa qo'shildi`); setExtraTimeTable(null); }}
-            style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
-            Qo'shish
+            onClick={() => { const m = Number(extraMinutes); onAddExtraTime(extraTimeTable.id, extraMode === "add" ? m : -m); setExtraTimeTable(null); }}
+            style={{ background: extraMode === "add" ? GOLD : "#d19a4f", color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
+            {extraMode === "add" ? "Qo'shish" : "Ayirish"}
           </button>
         </Modal>
       )}
@@ -4192,7 +4263,6 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
           </div>
           <button disabled={!transferDest} onClick={() => {
             onTransfer(transferTable.id, transferDest.hallId, transferDest.tableId);
-            onToast(`✅ "${transferTable.name}" ko'chirildi`);
             setTransferTable(null); setTransferDest(null);
           }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm disabled:opacity-40">
             Ko'chirish
@@ -4219,8 +4289,8 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
           <button disabled={closing} onClick={async () => {
             if (closing) return;
             setClosing(true);
-            await onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost }, paymentMethod);
-            setReceipt(null);
+            const ok = await onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost }, paymentMethod);
+            if (ok !== false) setReceipt(null); // yopilmasa oyna qoladi — qayta bosish mumkin
             setClosing(false);
           }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 mt-2 disabled:opacity-50">
             {closing ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} Tasdiqlash
