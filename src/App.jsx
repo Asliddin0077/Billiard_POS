@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   Plus, X, Clock, LogOut, Check, ArrowLeft, Ticket, ShoppingBasket, CircleDot,
   BarChart3, Users, ShieldCheck, Pencil, Trash2, MessageCircle, Send, Search,
@@ -16,7 +16,7 @@ const RED = "#b23a3a";
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.8.3"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "2.9.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- TIL (uz / ru) ----------------
 // Matnlar o'zbekcha yoziladi; "ru" tanlanganda ekrandagi matn lug'at bo'yicha ruschaga o'giriladi.
@@ -555,7 +555,7 @@ function isSameDay(a, b) {
   const da = new Date(a), db = new Date(b);
   return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
 }
-function daysAgo(ts, n) { return ts >= Date.now() - n * 24 * 3600 * 1000; }
+function daysAgo(ts, n) { return ts >= nowMs() - n * 24 * 3600 * 1000; }
 function guessEmoji(name) {
   const n = name.toLowerCase();
   if (/kola|cola|pepsi|fanta|sprite/.test(n)) return "🥤";
@@ -578,11 +578,11 @@ function colorFor(name) {
 function canAccess(owner) {
   if (!owner) return false;
   if (owner.accountType === "vip") return true;
-  if (owner.subscriptionUntil) return owner.subscriptionUntil > Date.now();
+  if (owner.subscriptionUntil) return owner.subscriptionUntil > nowMs();
   return !!owner.subscribed;
 }
 function isBanned(u) {
-  return u && u.banned && u.banUntil && u.banUntil > Date.now();
+  return u && u.banned && u.banUntil && u.banUntil > nowMs();
 }
 function unwrapRpc(data) { return Array.isArray(data) ? data[0] : data; }
 // ---------------- XAVFSIZLIK: sessiya tokeni ----------------
@@ -607,6 +607,39 @@ async function checkDbIdentity() {
     return !!(w.data.user_id || w.data.is_admin);
   } catch (e) { return true; }
 }
+// ---- Server vaqti: hisob telefon soatiga emas, server soatiga tayanadi ----
+var SERVER_OFFSET = 0; // server soati − telefon soati (ms)
+function nowMs() { return Date.now() + SERVER_OFFSET; }
+const UZ_OFFSET = 5 * 3600 * 1000, DAY_MS = 24 * 3600 * 1000; // O'zbekiston: UTC+5, yozgi vaqt yo'q
+// Toshkent bo'yicha bugungi sana (YYYY-MM-DD) — telefon vaqt mintaqasi noto'g'ri bo'lsa ham to'g'ri
+function uzToday() { return new Date(nowMs() + UZ_OFFSET).toISOString().slice(0, 10); }
+// Toshkent bo'yicha ish kuni boshlanishi (08:00)
+function uzBusinessDayStart(t) { const H8 = 8 * 3600 * 1000; return Math.floor((t + UZ_OFFSET - H8) / DAY_MS) * DAY_MS - UZ_OFFSET + H8; }
+async function syncServerClock() {
+  try {
+    const t0 = Date.now();
+    const { data, error } = await supabase.rpc("server_now");
+    const t1 = Date.now();
+    if (error || !data) return null;
+    const srv = new Date(data).getTime();
+    if (!isFinite(srv)) return null;
+    SERVER_OFFSET = Math.round(srv - (t0 + t1) / 2);
+    return SERVER_OFFSET;
+  } catch (e) { return null; }
+}
+function newUuid() {
+  try { if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => { const r = (Math.random() * 16) | 0; return (c === "x" ? r : (r & 3) | 8).toString(16); });
+}
+// Server funksiyasini chaqirish. missing=true — funksiya hali o'rnatilmagan (patch34 yo'q) → eski usulda ishlaymiz
+async function posRpc(name, args) {
+  try {
+    const { data, error } = await supabase.rpc(name, args);
+    if (error) return { missing: rpcMissing(error) && !/permission|policy/i.test(error.message || ""), error };
+    return { data: data || {} };
+  } catch (e) { return { error: e }; }
+}
+
 function rpcMissing(error) {
   return !!error && (error.code === "PGRST202" || /could not find the function|does not exist/i.test(error.message || ""));
 }
@@ -616,14 +649,14 @@ async function resolveAccessUser(u) {
   return data ? mapUser(data) : u;
 }
 function computeNewUntil(currentUntilMs, days) {
-  const now = Date.now();
+  const now = nowMs();
   const base = currentUntilMs && currentUntilMs > now ? currentUntilMs : now;
   const target = new Date(base + days * 86400000);
   target.setHours(8, 0, 0, 0); // klub odatda 8:00dan 8:00gacha ishlaydi — obuna shu vaqtda tugasin
   return target.getTime();
 }
 
-function subDaysLeft(until) { return Math.max(0, Math.ceil((until - Date.now()) / 86400000)); }
+function subDaysLeft(until) { return Math.max(0, Math.ceil((until - nowMs()) / 86400000)); }
 
 // ---------------- DB row -> JS object mapping ----------------
 function mapUser(row) {
@@ -687,7 +720,7 @@ function uzMinuteOfDay(ms) { const d = new Date(ms + UZ_OFF); return d.getUTCHou
 function uzDayStart(ms) { const d = new Date(ms + UZ_OFF); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - UZ_OFF; }
 function uzDateToMs(dateStr) { const [y, m, d] = dateStr.split("-").map(Number); return Date.UTC(y, m - 1, d) - UZ_OFF; }
 function hmToMin(hm) { const [h, m] = String(hm || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); }
-function nowUzDateStr() { return uzDateStr(Date.now()); }
+function nowUzDateStr() { return uzDateStr(nowMs()); }
 
 function promoAppliesToTable(p, tableId, hallId) {
   if (p.tableIds && p.tableIds.length) return p.tableIds.includes(tableId);
@@ -881,12 +914,19 @@ function mapShift(row) {
 // Klub ma'lumotlari bo'limlarga bo'lingan: amaldan keyin faqat o'zgargan bo'lim qayta yuklanadi.
 const OWNER_PARTS = ["halls", "bar", "chats", "warehouse", "debts", "staff", "shifts", "promos"];
 
-// O'yinlar tarixi: Supabase bitta so'rovda ko'pi bilan 1000 qator beradi — shuning uchun sahifalab olamiz
-async function fetchAllHistory(ownerId) {
+// O'yinlar tarixi: ilova ochilganda faqat oxirgi HISTORY_DAYS kun yuklanadi (tez ishlashi uchun).
+// Eski ma'lumotlar bazada to'liq saqlanadi — kerak bo'lganda (sana tanlanganda) alohida olib kelinadi.
+const HISTORY_DAYS = 35;
+const historyWindowStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - HISTORY_DAYS); return d.getTime(); };
+// Supabase bitta so'rovda ko'pi bilan 1000 qator beradi — shuning uchun sahifalab olamiz.
+// since/before — end_time oralig'i (ms). Ikkalasi ham bo'lmasa — butun tarix.
+async function fetchAllHistory(ownerId, since = null, before = null) {
   const PAGE = 1000, out = [];
-  for (let page = 0; page < 30; page++) {
-    const { data, error } = await supabase.from("session_history").select("*").eq("owner_id", ownerId)
-      .order("end_time", { ascending: false }).range(page * PAGE, page * PAGE + PAGE - 1);
+  for (let page = 0; page < 60; page++) {
+    let q = supabase.from("session_history").select("*").eq("owner_id", ownerId);
+    if (since != null) q = q.gte("end_time", new Date(since).toISOString());
+    if (before != null) q = q.lt("end_time", new Date(before).toISOString());
+    const { data, error } = await q.order("end_time", { ascending: false }).range(page * PAGE, page * PAGE + PAGE - 1);
     if (error || !data) break;
     out.push(...data);
     if (data.length < PAGE) break;
@@ -894,8 +934,58 @@ async function fetchAllHistory(ownerId) {
   return out;
 }
 
+// ---- Tarixni qurilmaning o'zida saqlash (IndexedDB) ----
+// Ilova qayta ochilganda tarix telefondan darhol olinadi, bazadan faqat yangi yozuvlar so'raladi.
+// Tarix yozuvlari faqat qo'shiladi (o'zgartirilmaydi, o'chirilmaydi) — shuning uchun kesh doim to'g'ri qoladi.
+// Har qanday xatoda (yashirin rejim, joy yo'q) jim o'tib ketadi — ilova bazadan odatdagidek yuklaydi.
+const HCACHE_DB = "billiard-pos-cache", HCACHE_STORE = "history", HCACHE_VER = 1;
+function hcacheOpen() {
+  return new Promise((resolve) => {
+    try {
+      if (typeof indexedDB === "undefined") return resolve(null);
+      const req = indexedDB.open(HCACHE_DB, 1);
+      req.onupgradeneeded = () => { try { req.result.createObjectStore(HCACHE_STORE); } catch (e) {} };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+      req.onblocked = () => resolve(null);
+    } catch (e) { resolve(null); }
+  });
+}
+async function hcacheGet(ownerId) {
+  const db = await hcacheOpen(); if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const r = db.transaction(HCACHE_STORE, "readonly").objectStore(HCACHE_STORE).get(ownerId);
+      r.onsuccess = () => { const v = r.result; resolve(v && v.v === HCACHE_VER && Array.isArray(v.rows) ? v : null); };
+      r.onerror = () => resolve(null);
+    } catch (e) { resolve(null); }
+  });
+}
+async function hcachePut(ownerId, since, rows) {
+  const db = await hcacheOpen(); if (!db) return;
+  try {
+    const tx = db.transaction(HCACHE_STORE, "readwrite"); const st = tx.objectStore(HCACHE_STORE);
+    st.clear(); // qurilmada faqat bitta klubning keshi turadi
+    st.put({ v: HCACHE_VER, since, rows, savedAt: nowMs() }, ownerId);
+  } catch (e) {}
+}
+// Keshdan olingan tarix + bazadan faqat yangilari
+async function historyFromCache(ownerId) {
+  const c = await hcacheGet(ownerId);
+  if (!c || !c.rows.length) return null;
+  const newest = c.rows.reduce((m, h) => Math.max(m, h.endTime || 0), 0);
+  const fresh = (await fetchAllHistory(ownerId, newest - 15 * 60000)).map(mapHistory);
+  const ids = new Set(fresh.map((h) => h.id));
+  const merged = [...fresh, ...c.rows.filter((h) => !ids.has(h.id))].sort((a, b) => b.endTime - a.endTime);
+  // kesh juda eski bo'lsa ham "since" chegarasi 35 kundan yangi bo'lmasin
+  const since = c.since == null ? null : Math.min(c.since, historyWindowStart());
+  return { rows: merged, since };
+}
+
 async function fetchOwnerData(ownerId, opts = {}) {
-  const withHistory = opts.history !== false;
+  const fromCache = opts.useCache && opts.history !== false && !opts.allHistory ? await historyFromCache(ownerId) : null;
+  const withHistory = opts.history !== false && !fromCache;
+  const histSince = fromCache ? fromCache.since : (opts.allHistory ? null : historyWindowStart());
   const want = new Set(opts.parts || OWNER_PARTS);
   const q = {};
   if (want.has("halls")) q.halls = supabase.from("halls").select("*, billiard_tables(*, table_extras(*), table_laps(*))").eq("owner_id", ownerId).order("created_at").order("position", { foreignTable: "billiard_tables" });
@@ -918,10 +1008,10 @@ async function fetchOwnerData(ownerId, opts = {}) {
   if (want.has("shifts")) q.shifts = supabase.from("shifts").select("*").eq("owner_id", ownerId).order("opened_at", { ascending: false }).limit(60);
   if (want.has("promos")) q.promos = supabase.from("promotions").select("*").eq("owner_id", ownerId).order("created_at", { ascending: false });
   const keys = Object.keys(q);
-  const [res, hist] = await Promise.all([Promise.all(keys.map((k) => q[k])), withHistory ? fetchAllHistory(ownerId) : Promise.resolve(null)]);
+  const [res, hist] = await Promise.all([Promise.all(keys.map((k) => q[k])), withHistory ? fetchAllHistory(ownerId, histSince) : Promise.resolve(null)]);
   const r = {}; keys.forEach((k, i) => { r[k] = res[i]; });
   const rows = (x) => (x && !x.error && x.data) || [];
-  const out = { history: hist ? hist.map(mapHistory) : null };
+  const out = { history: fromCache ? fromCache.rows : (hist ? hist.map(mapHistory) : null), historySince: histSince };
   if (r.halls) out.halls = rows(r.halls).map(mapHall);
   if (r.bar) out.bar = rows(r.bar).map(mapBarItem);
   if (r.chats) out.chats = rows(r.chats).map(mapChat);
@@ -966,6 +1056,10 @@ export default function BilliardPOS() {
   const touchStartY = useRef(0);
   const refreshSeq = useRef({});
   const lastHistoryAt = useRef(0);
+  const [historySince, setHistorySince] = useState(null); // shu sanadan eskisi hali yuklanmagan (null = hammasi yuklangan)
+  const historySinceRef = useRef(null);
+  const olderLoading = useRef(false);
+  const historyRef = useRef([]);
   const lastOwnerLoadAt = useRef(0);
   const pulling = useRef(false);
 
@@ -1002,7 +1096,7 @@ export default function BilliardPOS() {
     window.addEventListener("beforeinstallprompt", handleInstallPrompt);
     return () => window.removeEventListener("beforeinstallprompt", handleInstallPrompt);
   }, []);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(nowMs());
   const [activeHallId, setActiveHallId] = useState(null);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [trialDays, setTrialDays] = useState(3);
@@ -1027,6 +1121,36 @@ export default function BilliardPOS() {
   const [shifts, setShifts] = useState([]);
   const [promos, setPromos] = useState([]);
   const [history, setHistory] = useState([]);
+  useEffect(() => { historyRef.current = history || []; }, [history]);
+  // Server soatini aniqlash: ochilganda, har 10 daqiqada va ilovaga qaytilganda.
+  // Telefon soati noto'g'ri bo'lsa ham hisob server vaqti bilan yuritiladi; 2 daqiqadan katta farq bo'lsa — ogohlantiramiz.
+  const clockWarned = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      const off = await syncServerClock();
+      if (!alive || off == null) return;
+      if (Math.abs(off) > 120000 && !clockWarned.current) {
+        clockWarned.current = true;
+        const m = Math.round(Math.abs(off) / 60000);
+        showToast(`⚠️ Telefon soati ${m >= 60 ? Math.round(m / 60) + " soat" : m + " daqiqa"} noto'g'ri. Hisob server vaqti bilan to'g'ri yuritiladi, lekin sozlamalarda "Avtomatik vaqt"ni yoqing`);
+      }
+    };
+    run();
+    const id = setInterval(run, 10 * 60000);
+    const onVis = () => { if (document.visibilityState === "visible") run(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { alive = false; clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Tarix o'zgarganda (1,5 soniya kutib) qurilmaga saqlab qo'yamiz
+  useEffect(() => {
+    if (!currentUser || !history || !history.length) return;
+    const owner = ownerIdOf(currentUser);
+    const id = setTimeout(() => { hcachePut(owner, historySinceRef.current, history); }, 1500);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, historySince]);
   const [myChat, setMyChat] = useState([]);
 
   const [users, setUsers] = useState([]);
@@ -1107,8 +1231,8 @@ export default function BilliardPOS() {
                 setSessionToken(s.token || null);
                 if (isBanned(accessUser)) { setScreen("banned"); }
                 else {
-                  const od = await fetchOwnerData(ownerIdOf(u)); lastOwnerLoadAt.current = Date.now(); lastHistoryAt.current = Date.now();
-                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
+                  const od = await fetchOwnerData(ownerIdOf(u), { useCache: true }); lastOwnerLoadAt.current = nowMs(); lastHistoryAt.current = nowMs();
+                  setHalls(od.halls); setBar(od.bar); setHistory(od.history); historySinceRef.current = od.historySince; setHistorySince(od.historySince); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
                   setScreen(canAccess(accessUser) ? "halls" : "subscribe");
                 }
               }
@@ -1129,7 +1253,7 @@ export default function BilliardPOS() {
       if (data && data.active_session_token && data.active_session_token !== sessionToken) {
         localStorage.removeItem(SESSION_KEY);
         setCurrentUser(null); setSessionToken(null);
-        setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
+        setHalls([]); setBar([]); setHistory([]); historySinceRef.current = null; setHistorySince(null); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
         setScreen("auth");
         showToast("Boshqa qurilmada tizimga kirilgani uchun chiqib ketdingiz");
       }
@@ -1139,7 +1263,7 @@ export default function BilliardPOS() {
   useEffect(() => {
     return; // soniya hisoblagich endi faqat stollar ekranining o'zida (butun ilova har soniyada qayta chizilmasin)
     // eslint-disable-next-line no-unreachable
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => setNow(nowMs()), 1000);
     return () => clearInterval(id);
   }, [anyPlaying]);
   useEffect(() => {
@@ -1207,12 +1331,11 @@ export default function BilliardPOS() {
   useEffect(() => {
     if (!currentUser) return;
     if (["stats", "finance", "warehouse", "debts"].includes(screen)) {
-      // Butun tarixni 1 daqiqada ko'pi bilan bir marta yuklaymiz (stol yopilganda oxirgilari baribir qo'shiladi)
-      const needHistory = Date.now() - lastHistoryAt.current > 60000;
-      if (needHistory) lastHistoryAt.current = Date.now();
-      refreshOwnerData(null, { history: needHistory });
+      // Butun tarixni qayta yuklamaymiz — faqat oxirgi yopilgan stollarni qo'shamiz (20 soniyada ko'pi bilan bir marta)
+      if (nowMs() - lastHistoryAt.current > 20000) { lastHistoryAt.current = nowMs(); mergeRecentHistory(); }
+      refreshOwnerData(null, { history: false });
     }
-    else if (screen === "halls" && Date.now() - lastOwnerLoadAt.current > 15000) { lastOwnerLoadAt.current = Date.now(); refreshOwnerData(); }
+    else if (screen === "halls" && nowMs() - lastOwnerLoadAt.current > 15000) { lastOwnerLoadAt.current = nowMs(); refreshOwnerData(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
   async function refreshMyChat() {
@@ -1240,7 +1363,7 @@ export default function BilliardPOS() {
       await supabase.from("users").update({ active_session_token: token }).eq("id", u.id);
     }
     try { localStorage.setItem(`billiard-pos-newuser-${u.id}`, "1"); } catch (e) {}
-    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
+    setCurrentUser(u); setSessionToken(token); setHalls([]); setBar([]); setHistory([]); historySinceRef.current = null; setHistorySince(null); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
     persistSession({ userId: u.id, isAdmin: false, token });
     setScreen("subscribe");
   }
@@ -1302,7 +1425,7 @@ export default function BilliardPOS() {
       setDbToken(token);
       if (!(await checkDbIdentity())) { console.error("x-pos-token yetib bormayapti"); showToast("⚠️ Xavfsizlik tokeni ishlamayapti — 29-B SQL'ni ishga tushirmang"); }
     }
-    if (u.banned && u.banUntil && u.banUntil <= Date.now()) {
+    if (u.banned && u.banUntil && u.banUntil <= nowMs()) {
       await supabase.from("users").update({ banned: false, ban_until: null, ban_reason: "" }).eq("id", u.id);
       u = { ...u, banned: false, banUntil: null, banReason: "" };
     }
@@ -1312,8 +1435,8 @@ export default function BilliardPOS() {
     const accessUser = await resolveAccessUser(u);
     if (u.role === "staff") setCurrentUser({ ...u, betaAccess: accessUser.betaAccess, planTier: accessUser.planTier, accountType: accessUser.accountType });
     if (isBanned(accessUser)) { setScreen("banned"); return; }
-    const od = await fetchOwnerData(ownerIdOf(u)); lastOwnerLoadAt.current = Date.now(); lastHistoryAt.current = Date.now();
-    setHalls(od.halls); setBar(od.bar); setHistory(od.history); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
+    const od = await fetchOwnerData(ownerIdOf(u), { useCache: true }); lastOwnerLoadAt.current = nowMs(); lastHistoryAt.current = nowMs();
+    setHalls(od.halls); setBar(od.bar); setHistory(od.history); historySinceRef.current = od.historySince; setHistorySince(od.historySince); setMyChat(od.chats); setWarehouseItems(od.warehouseItems); setWarehouseLogs(od.warehouseLogs); setDebts(od.debts); setDebtPayments(od.debtPayments); setDebtTopups(od.debtTopups); setStaffList(od.staffList); setStaffSalaries(od.staffSalaries); setSalaryPayments(od.salaryPayments); setShifts(od.shifts); setPromos(od.promos || []);
     setScreen(canAccess(accessUser) ? "halls" : "subscribe");
   }
 
@@ -1322,16 +1445,15 @@ export default function BilliardPOS() {
     setDbToken(null);
     persistSession({ userId: null, isAdmin: false });
     setCurrentUser(null); setSessionToken(null); setIsAdmin(false); setAdminLogin(null);
-    setHalls([]); setBar([]); setHistory([]); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
+    setHalls([]); setBar([]); setHistory([]); historySinceRef.current = null; setHistorySince(null); setMyChat([]); setWarehouseItems([]); setWarehouseLogs([]); setDebts([]); setDebtPayments([]); setDebtTopups([]); setStaffList([]); setStaffSalaries([]); setSalaryPayments([]); setShifts([]);
     setUsers([]); setPromoCodes([]); setAdminAccounts([]); setChatsByUser({});
     setActiveHallId(null); setScreen("auth");
   }
 
   useEffect(() => {
     if (!currentUser || currentUser.posikEnabled === false || !history || !history.length) return;
-    const now = new Date(); const start = new Date(now); start.setHours(8, 0, 0, 0);
-    if (now < start) start.setDate(start.getDate() - 1);
-    const n = history.filter((h) => h.endTime >= start.getTime()).length;
+    const startMs = uzBusinessDayStart(nowMs());
+    const n = history.filter((h) => h.endTime >= startMs).length;
     const reached = [50, 100, 150, 200].filter((m) => n >= m);
     if (!reached.length) return;
     const m = reached[reached.length - 1];
@@ -1378,7 +1500,13 @@ export default function BilliardPOS() {
     await supabase.from("billiard_tables").insert({ hall_id: hallId, name, rate, status: "free", position: nextPos });
     await refreshOwnerData(null, { parts: ["halls"] });
   }
-  async function editTable(hallId, tableId, name, rate) { await supabase.from("billiard_tables").update({ name, rate }).eq("id", tableId); await refreshOwnerData(null, { parts: ["halls"] }); }
+  async function editTable(hallId, tableId, name, rate) {
+    // Nom har doim o'zgaradi; narx esa faqat stol BO'SH bo'lsa (boshqa qurilmada o'yin boshlangan bo'lsa — butun o'yin yangi narxda hisoblanib ketmasin)
+    await supabase.from("billiard_tables").update({ name }).eq("id", tableId);
+    const r = await supabase.from("billiard_tables").update({ rate }).eq("id", tableId).eq("status", "free").select("id");
+    if (!r.error && r.data && r.data.length === 0) showToast(`⚠️ Stol band — narx o'yin tugagach o'zgartiriladi`);
+    await refreshOwnerData(null, { parts: ["halls"] });
+  }
   async function savePromo(f) {
     const payload = {
       owner_id: ownerIdOf(currentUser), name: (f.name || "Aksiya").trim(), price: Number(f.price),
@@ -1391,7 +1519,7 @@ export default function BilliardPOS() {
     await refreshOwnerData(null, { parts: ["promos"] }); return true;
   }
   async function endPromo(id) {
-    const r = await supabase.from("promotions").update({ ended_at: new Date().toISOString() }).eq("id", id);
+    const r = await supabase.from("promotions").update({ ended_at: new Date(nowMs()).toISOString() }).eq("id", id);
     if (r.error) showToast(`❌ Xatolik: ${r.error.message}`); else showToast("Aksiya to'xtatildi");
     await refreshOwnerData(null, { parts: ["promos"] });
   }
@@ -1403,9 +1531,19 @@ export default function BilliardPOS() {
   async function deleteTable(hallId, tableId) { await supabase.from("billiard_tables").delete().eq("id", tableId); await refreshOwnerData(null, { parts: ["halls"] }); }
   async function startTable(hallId, tableId, targetSeconds, prepaidAmount) {
     const nm = tableNameOf(hallId, tableId);
+    // Server funksiyasi: vaqt server soatidan, faqat bo'sh stol ochiladi, eski qoldiqlar shu zahoti tozalanadi
+    const rr = await posRpc("pos_start_table", { p_table: tableId, p_target_seconds: targetSeconds || null, p_prepaid: prepaidAmount || null, p_actor: currentUser.name });
+    if (!rr.missing) {
+      if (rr.error) showToast(`❌ "${nm}" OCHILMADI (${errText(rr.error)}) — qayta urinib ko'ring`);
+      else if (rr.data.status === "ok") { buzz(); showToast(`🟢 "${nm}" ochildi · ${fmtTime(new Date(nowMs()))}`); }
+      else if (rr.data.status === "busy") showToast(`⚠️ "${nm}" allaqachon ochilgan`);
+      else showToast(`❌ "${nm}" ochilmadi — sahifani yangilang`);
+      await refreshOwnerData(null, { parts: ["halls"] });
+      return;
+    }
     try {
       const r = await supabase.from("billiard_tables").update({
-        status: "playing", start_time: new Date().toISOString(), note: null,
+        status: "playing", start_time: new Date(nowMs()).toISOString(), note: null,
         target_seconds: targetSeconds || null, prepaid_amount: prepaidAmount || null,
         paused_at: null, paused_seconds: 0, pause_log: [],
         started_by_name: currentUser.name,
@@ -1418,16 +1556,24 @@ export default function BilliardPOS() {
           supabase.from("table_extras").delete().eq("table_id", tableId),
           supabase.from("table_laps").delete().eq("table_id", tableId),
         ]);
-        buzz(); showToast(`🟢 "${nm}" ochildi · ${fmtTime(new Date())}`);
+        buzz(); showToast(`🟢 "${nm}" ochildi · ${fmtTime(new Date(nowMs()))}`);
       }
     } catch (e) { showToast(`❌ "${nm}" OCHILMADI (${errText(e)}) — qayta urinib ko'ring`); }
     await refreshOwnerData(null, { parts: ["halls"] });
   }
   async function pauseTable(hallId, tableId) {
     const nm = tableNameOf(hallId, tableId);
+    const rr = await posRpc("pos_pause_table", { p_table: tableId, p_actor: currentUser.name });
+    if (!rr.missing) {
+      if (rr.error) showToast(`❌ "${nm}" pauzaga qo'yilmadi (${errText(rr.error)})`);
+      else if (rr.data.status === "ok") showToast(`⏸ "${nm}" pauzada`);
+      else showToast(`⚠️ "${nm}" hozir o'ynalmayapti (boshqa qurilmada o'zgargan bo'lishi mumkin)`);
+      await refreshOwnerData(null, { parts: ["halls"] });
+      return;
+    }
     try {
       const r = await supabase.from("billiard_tables").update({
-        status: "paused", paused_at: new Date().toISOString(),
+        status: "paused", paused_at: new Date(nowMs()).toISOString(),
       }).eq("id", tableId).select("id");
       if (r.error) showToast(`❌ "${nm}" pauzaga qo'yilmadi (${errText(r.error)})`);
       else showToast(`⏸ "${nm}" pauzada`);
@@ -1437,8 +1583,18 @@ export default function BilliardPOS() {
   async function resumeTable(hallId, tableId) {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
-    if (!table || !table.pausedAt) return;
-    const resumedAt = Date.now();
+    if (!table) return;
+    // Server funksiyasi: pauza vaqti serverdagi qiymatlardan hisoblanadi (telefondagi eski ma'lumot pauzalarni o'chirib yubormaydi)
+    const rr = await posRpc("pos_resume_table", { p_table: tableId, p_actor: currentUser.name });
+    if (!rr.missing) {
+      if (rr.error) showToast(`❌ "${table.name}" davom ettirilmadi (${errText(rr.error)})`);
+      else if (rr.data.status === "ok") showToast(`▶️ "${table.name}" davom etyapti`);
+      else showToast(`⚠️ "${table.name}" pauzada emas (boshqa qurilmada o'zgargan bo'lishi mumkin)`);
+      await refreshOwnerData(null, { parts: ["halls"] });
+      return;
+    }
+    if (!table.pausedAt) return;
+    const resumedAt = nowMs();
     const addedPause = (resumedAt - table.pausedAt) / 1000;
     try {
       const r = await supabase.from("billiard_tables").update({
@@ -1455,6 +1611,17 @@ export default function BilliardPOS() {
     const sourceHall = halls.find((h) => h.id === sourceHallId);
     const source = sourceHall && sourceHall.tables.find((t) => t.id === sourceTableId);
     if (!source || !destTableId) return;
+    const rr = await posRpc("pos_transfer_table", { p_source: sourceTableId, p_dest: destTableId, p_actor: currentUser.name });
+    if (!rr.missing) {
+      const st = rr.data && rr.data.status;
+      if (rr.error) showToast(`❌ "${source.name}" ko'chirilmadi (${errText(rr.error)})`);
+      else if (st === "ok") showToast(`✅ "${source.name}" → "${tableNameOf(destHallId, destTableId)}" ko'chirildi`);
+      else if (st === "dest_busy") showToast(`⚠️ "${tableNameOf(destHallId, destTableId)}" band — boshqa stol tanlang`);
+      else if (st === "source_free") showToast(`⚠️ "${source.name}" allaqachon bo'sh`);
+      else showToast(`❌ Ko'chirilmadi — sahifani yangilang`);
+      await refreshOwnerData(null, { parts: ["halls"] });
+      return;
+    }
     try {
     const r1 = await supabase.from("billiard_tables").update({
       status: source.status, start_time: source.startTime ? new Date(source.startTime).toISOString() : null,
@@ -1478,10 +1645,21 @@ export default function BilliardPOS() {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
     if (!table || !table.startTime) return;
-    const mins = Number(minutes) || 0; // musbat — qo'shish, manfiy — ayirish
+    const mins = Math.round(Number(minutes) || 0); // musbat — qo'shish, manfiy — ayirish
     if (!mins) return;
+    const rr = await posRpc("pos_adjust_time", { p_table: tableId, p_minutes: mins, p_actor: currentUser.name });
+    if (!rr.missing) {
+      const st = rr.data && rr.data.status;
+      if (rr.error) showToast(`❌ Vaqt o'zgarmadi (${errText(rr.error)})`);
+      else if (st === "ok") showToast(mins > 0 ? `✅ "${table.name}"ga ${mins} daqiqa qo'shildi` : `✅ "${table.name}"dan ${-mins} daqiqa ayirildi`);
+      else if (st === "too_much") showToast(`❌ "${table.name}"da hozircha ${rr.data.played_minutes} daqiqa bor — undan ko'p ayirib bo'lmaydi`);
+      else if (st === "laps_conflict") showToast(`❌ "${table.name}"da raundlar bor — bunchalik ayirib bo'lmaydi`);
+      else showToast(`⚠️ "${table.name}" hozir o'ynalmayapti`);
+      await refreshOwnerData(null, { parts: ["halls"] });
+      return;
+    }
     if (mins < 0) {
-      const refEnd = table.status === "paused" && table.pausedAt ? table.pausedAt : Date.now();
+      const refEnd = table.status === "paused" && table.pausedAt ? table.pausedAt : nowMs();
       const elapsedMin = ((refEnd - table.startTime) / 1000 - (table.pausedSeconds || 0)) / 60;
       if (-mins > elapsedMin) { showToast(`❌ "${table.name}"da hozircha ${Math.floor(elapsedMin)} daqiqa bor — undan ko'p ayirib bo'lmaydi`); return; }
       const firstLap = (table.laps || []).length ? Math.min(...table.laps.map((l) => l.start)) : null;
@@ -1506,7 +1684,7 @@ export default function BilliardPOS() {
       await supabase.from("warehouse_items").update({ units_in_stock: wi.units - 1 }).eq("id", wi.id);
       await supabase.from("warehouse_logs").insert({
         warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -1, type: "sale",
-        note: "stolga sotildi", entry_date: new Date().toISOString().slice(0, 10),
+        note: "stolga sotildi", entry_date: uzToday(),
       });
     } else {
       const r = await supabase.from("table_extras").insert({ table_id: tableId, name: extra.name, price: extra.price });
@@ -1535,23 +1713,41 @@ export default function BilliardPOS() {
       for (let i = 0; i < item.qty; i++) rows.push({ table_id: tableId, name: item.name, price: item.price, cost_price: costPrice });
     }
     if (!rows.length) return { ok: false };
+    // Skladni AVVAL bazaning o'zida ayiramiz (o'qib-yozish emas). Yetmasa — to'xtaymiz va oldin ayirganlarni qaytaramiz.
+    let stockViaRpc = false; const stockDone = [];
+    const giveBack = async () => { for (const d of stockDone) await posRpc("pos_stock_change", { p_item: d.wi.id, p_delta: d.item.qty, p_mode: "free" }); };
+    for (const op of stockOps) {
+      const rr = await posRpc("pos_stock_change", { p_item: op.wi.id, p_delta: -op.item.qty, p_mode: "check" });
+      if (rr.missing) { stockViaRpc = false; break; }
+      stockViaRpc = true;
+      if (rr.error || rr.data.status !== "ok") {
+        await giveBack();
+        showToast(rr.error ? `❌ Sklad yangilanmadi (${errText(rr.error)})` : `❌ Skladda "${op.item.name}" yetarli emas (${rr.data.units != null ? rr.data.units : 0} dona bor)`);
+        refreshOwnerData(null, { parts: ["warehouse"] });
+        return { ok: false };
+      }
+      stockDone.push(op);
+    }
     // Hammasi BITTA so'rovda yoziladi — yarim-yorti qo'shilib qolmaydi
     const ins = await supabase.from("table_extras").insert(rows).select();
     if (ins.error) {
+      await giveBack();
       showToast(`❌ Qo'shilmadi: ${ins.error.message}. Qayta urinib ko'ring`);
       return { ok: false };
     }
     // Ekranda darhol ko'rinsin (bazadan qayta yuklashni kutmasdan)
     const added = (ins.data || []).map((e) => ({ id: e.id, name: e.name, price: Number(e.price), costPrice: Number(e.cost_price || 0) }));
     setHalls((hs) => hs.map((h) => h.id !== hallId ? h : { ...h, tables: h.tables.map((t) => t.id !== tableId ? t : { ...t, extras: [...t.extras, ...added] }) }));
-    // Sklad: bazadagi eng so'nggi qoldiqdan ayiramiz
+    // Sklad jurnali (patch34 bo'lmasa — qoldiqni eski usulda ham ayiramiz)
     await Promise.all(stockOps.map(async ({ wi, item, costPrice }) => {
-      const cur = await supabase.from("warehouse_items").select("units_in_stock").eq("id", wi.id).single();
-      const units = cur.data ? Number(cur.data.units_in_stock) : wi.units;
-      await supabase.from("warehouse_items").update({ units_in_stock: units - item.qty }).eq("id", wi.id);
+      if (!stockViaRpc) {
+        const cur = await supabase.from("warehouse_items").select("units_in_stock").eq("id", wi.id).single();
+        const units = cur.data ? Number(cur.data.units_in_stock) : wi.units;
+        await supabase.from("warehouse_items").update({ units_in_stock: units - item.qty }).eq("id", wi.id);
+      }
       await supabase.from("warehouse_logs").insert({
         warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -item.qty, type: "sale",
-        cost_price: costPrice, sell_price: item.price, note: tableLabel, entry_date: new Date().toISOString().slice(0, 10),
+        cost_price: costPrice, sell_price: item.price, note: tableLabel, entry_date: uzToday(),
         actor_id: currentUser.id, actor_name: currentUser.name,
       });
     }));
@@ -1569,8 +1765,11 @@ export default function BilliardPOS() {
       if (error) { showToast(`❌ Xatolik: ${error.message}`); return; }
       wi = mapWarehouseItem(data);
     }
-    const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units + units }).eq("id", wi.id);
-    if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
+    const rs = await posRpc("pos_stock_change", { p_item: wi.id, p_delta: units, p_mode: "free" });
+    if (rs.missing) {
+      const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units + units }).eq("id", wi.id);
+      if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
+    } else if (rs.error || rs.data.status !== "ok") { showToast(`❌ Xatolik: ${rs.error ? errText(rs.error) : rs.data.status}`); return; }
     const r2 = await supabase.from("warehouse_logs").insert({
       warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: units, type: "add",
       blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: entryDate,
@@ -1588,11 +1787,14 @@ export default function BilliardPOS() {
     if (!wi) return;
     const units = (Number(blocks) || 0) * (Number(unitsPerBlock) || 1);
     if (units <= 0) return;
-    const r1 = await supabase.from("warehouse_items").update({ units_in_stock: Math.max(0, wi.units - units) }).eq("id", wi.id);
-    if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
+    const rs = await posRpc("pos_stock_change", { p_item: wi.id, p_delta: -units, p_mode: "clamp" });
+    if (rs.missing) {
+      const r1 = await supabase.from("warehouse_items").update({ units_in_stock: Math.max(0, wi.units - units) }).eq("id", wi.id);
+      if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
+    } else if (rs.error || rs.data.status !== "ok") { showToast(`❌ Xatolik: ${rs.error ? errText(rs.error) : rs.data.status}`); return; }
     const r2 = await supabase.from("warehouse_logs").insert({
       warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -units, type: "remove",
-      blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: new Date().toISOString().slice(0, 10),
+      blocks: Number(blocks), units_per_block: Number(unitsPerBlock), note: note || "", entry_date: uzToday(),
       actor_id: currentUser.id, actor_name: currentUser.name,
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
@@ -1605,12 +1807,16 @@ export default function BilliardPOS() {
     if (units <= 0) return;
     if (units > wi.units) { showToast(`❌ Skladda faqat ${wi.units} dona bor`); return; }
     const barItem = wi.barItemId ? bar.find((b) => b.id === wi.barItemId) : null;
-    const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units - units }).eq("id", wi.id);
-    if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
+    const rs = await posRpc("pos_stock_change", { p_item: wi.id, p_delta: -units, p_mode: "check" });
+    if (rs.missing) {
+      const r1 = await supabase.from("warehouse_items").update({ units_in_stock: wi.units - units }).eq("id", wi.id);
+      if (r1.error) { showToast(`❌ Xatolik: ${r1.error.message}`); return; }
+    } else if (rs.error) { showToast(`❌ Xatolik: ${errText(rs.error)}`); return; }
+    else if (rs.data.status !== "ok") { showToast(`❌ Skladda faqat ${rs.data.units != null ? rs.data.units : 0} dona bor`); await refreshOwnerData(null, { parts: ["warehouse"] }); return; }
     const r2 = await supabase.from("warehouse_logs").insert({
       warehouse_item_id: wi.id, owner_id: ownerIdOf(currentUser), change_units: -units, type: "direct",
       cost_price: barItem ? barItem.costPrice : null, sell_price: barItem ? barItem.price : null,
-      note: note || "", entry_date: new Date().toISOString().slice(0, 10),
+      note: note || "", entry_date: uzToday(),
       actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
     });
     if (r2.error) { showToast(`❌ Xatolik: ${r2.error.message}`); return; }
@@ -1628,13 +1834,23 @@ export default function BilliardPOS() {
   async function payDebt(debtId, payAmount, paymentMethod) {
     const d = debts.find((x) => x.id === debtId);
     if (!d) return;
+    // Server funksiyasi: qolgan summa bazadagi eng so'nggi qiymatdan hisoblanadi (ikki to'lov bir-birini o'chirmaydi)
+    const rr = await posRpc("pos_debt_pay", { p_debt: debtId, p_amount: payAmount == null ? null : Number(payAmount), p_method: paymentMethod || "naqd", p_actor: currentUser.name });
+    if (!rr.missing) {
+      if (rr.error) showToast(`❌ Xatolik: ${errText(rr.error)}`);
+      else if (rr.data.status === "ok") showToast(`✅ ${fmtMoney(rr.data.applied)} to'landi${rr.data.remaining > 0 ? ` · qoldi ${fmtMoney(rr.data.remaining)}` : " · qarz yopildi"}`);
+      else if (rr.data.status === "nothing") showToast(`⚠️ Bu qarz allaqachon to'langan`);
+      else showToast(`❌ Qarz topilmadi — sahifani yangilang`);
+      await refreshOwnerData(null, { parts: ["debts"] });
+      return;
+    }
     const remaining = d.amount - d.paidAmount;
     const applied = payAmount == null ? remaining : Math.min(Number(payAmount), remaining);
     if (applied <= 0) return;
     const newPaid = d.paidAmount + applied;
     const closed = newPaid >= d.amount;
     const r = await supabase.from("debts").update({
-      paid_amount: newPaid, status: closed ? "closed" : "open", closed_at: closed ? new Date().toISOString() : null,
+      paid_amount: newPaid, status: closed ? "closed" : "open", closed_at: closed ? new Date(nowMs()).toISOString() : null,
     }).eq("id", debtId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     const r2 = await supabase.from("debt_payments").insert({
@@ -1649,6 +1865,13 @@ export default function BilliardPOS() {
     if (!d) return;
     const add = Number(amount) || 0;
     if (add <= 0) return;
+    const rr = await posRpc("pos_debt_add", { p_debt: debtId, p_amount: add, p_note: note || "", p_actor: currentUser.name });
+    if (!rr.missing) {
+      if (rr.error) showToast(`❌ Xatolik: ${errText(rr.error)}`);
+      else if (rr.data.status !== "ok") showToast(`❌ Qarz topilmadi — sahifani yangilang`);
+      await refreshOwnerData(null, { parts: ["debts"] });
+      return;
+    }
     const newAmount = d.amount + add;
     const r = await supabase.from("debts").update({
       amount: newAmount, status: "open", closed_at: null,
@@ -1669,8 +1892,18 @@ export default function BilliardPOS() {
     const hall = halls.find((h) => h.id === hallId);
     const table = hall && hall.tables.find((t) => t.id === tableId);
     if (!table || !table.startTime) return;
+    // Server funksiyasi: raund vaqti server soatidan, ketma-ket ikki marta bosilsa ikkinchisi yozilmaydi
+    const rr = await posRpc("pos_add_lap", { p_table: tableId, p_comment: comment || "", p_actor: currentUser.name });
+    if (!rr.missing) {
+      const st = rr.data && rr.data.status;
+      if (rr.error) showToast(`❌ Raund yozilmadi (${errText(rr.error)})`);
+      else if (st === "too_soon") showToast(`⚠️ Raund hozirgina yozildi`);
+      else if (st !== "ok") showToast(`⚠️ "${table.name}" hozir o'ynalmayapti`);
+      await refreshOwnerData(null, { parts: ["halls"] });
+      return;
+    }
     const lastEnd = table.laps.length > 0 ? Math.max(...table.laps.map((l) => l.end)) : table.startTime;
-    const now2 = Date.now();
+    const now2 = nowMs();
     const durationSeconds = Math.max(0, (now2 - lastEnd) / 1000);
     await supabase.from("table_laps").insert({
       table_id: tableId, lap_start: new Date(lastEnd).toISOString(), lap_end: new Date(now2).toISOString(),
@@ -1684,6 +1917,50 @@ export default function BilliardPOS() {
       const table = hall && hall.tables.find((t) => t.id === tableId);
       if (!table) { showToast(`❌ Stol topilmadi, sahifani yangilang`); return true; }
 
+      const existingLaps = table.laps;
+      const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
+      const finalDuration = Math.max(0, (record.endTime - lastCheckpoint) / 1000);
+      const lapCost = (a, b) => Math.round(tableCharge(table, hallId, promos, record.endTime, a, b).cost);
+      const finalLap = { start: lastCheckpoint, end: record.endTime, duration: finalDuration, comment: "", cost: lapCost(lastCheckpoint, record.endTime) };
+      const allLaps = [
+        ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: lapCost(l.start, l.end) })),
+        finalLap,
+      ];
+      const tableCostR = Math.round(record.tableCost || 0), extrasCostR = Math.round(record.extrasCost || 0);
+      const totalR = tableCostR + extrasCostR;
+
+      // Server funksiyasi: chek + stolni bo'shatish + tozalash BITTA amalda.
+      // closeId shu chek uchun bir marta yaratiladi — internet uzilib qayta bosilsa ham ikkinchi chek yozilmaydi.
+      if (record.closeId) {
+        const rr = await posRpc("pos_close_table", {
+          p_table: tableId, p_close_id: record.closeId,
+          p_expected_start: record.expectedStart ? new Date(record.expectedStart).toISOString() : null,
+          p_extra_ids: record.extraIds || [],
+          p_record: {
+            hall_name: hall ? hall.name : "", table_name: record.tableName,
+            start_time: new Date(record.startTime).toISOString(), end_time: new Date(record.endTime).toISOString(),
+            duration_seconds: Math.round(record.duration), table_cost: tableCostR, extras: record.extras, extras_cost: extrasCostR,
+            total: totalR, laps: allLaps, general_note: table.note || null, actor_name: currentUser.name,
+            payment_method: paymentMethod || "naqd", opened_by_name: table.startedByName || "",
+          },
+        });
+        if (!rr.missing) {
+          const st = rr.data && rr.data.status;
+          if (rr.error) { showToast(`❌ "${table.name}" YOPILMADI (${errText(rr.error)}) — internetni tekshirib, qayta bosing`); return false; }
+          if (st === "ok") {
+            buzz(); showToast(`🔴 "${table.name}" yopildi · ${fmtMoney(totalR)} · ${fmtTime(new Date(nowMs()))}`);
+            await Promise.all([refreshOwnerData(null, { parts: ["halls", "warehouse", "debts"] }), mergeRecentHistory()]);
+            return true;
+          }
+          if (st === "already_free") showToast(`⚠️ "${table.name}" allaqachon yopilgan`);
+          else if (st === "changed") showToast(`⚠️ "${table.name}" boshqa qurilmada o'zgargan — ekran yangilandi, qaytadan "Yopish"ni bosing`);
+          else if (st === "extras_changed") showToast(`⚠️ "${table.name}"ga yangi mahsulot qo'shilgan — chek yangilanishi kerak, qaytadan "Yopish"ni bosing`);
+          else showToast(`❌ "${table.name}" yopilmadi — sahifani yangilang`);
+          await refreshOwnerData(null, { parts: ["halls", "warehouse", "debts"] });
+          return "refresh";
+        }
+      }
+
       // Avval atomik ravishda stolni "bo'sh" qilamiz — faqat hali "bo'sh" bo'lmagan bo'lsa.
       // Ikki qurilma bir vaqtda bossa, faqat BITTASI muvaffaqiyatli bo'ladi (boshqasi 0 qator qaytaradi).
       const flip = await supabase.from("billiard_tables").update({ status: "free", start_time: null, note: null })
@@ -1695,21 +1972,11 @@ export default function BilliardPOS() {
         return true;
       }
 
-      const existingLaps = table.laps;
-      const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : record.startTime;
-      const finalDuration = Math.max(0, (record.endTime - lastCheckpoint) / 1000);
-      const lapCost = (a, b) => tableCharge(table, hallId, promos, record.endTime, a, b).cost;
-      const finalLap = { start: lastCheckpoint, end: record.endTime, duration: finalDuration, comment: "", cost: lapCost(lastCheckpoint, record.endTime) };
-      const allLaps = [
-        ...existingLaps.map((l) => ({ start: l.start, end: l.end, duration: l.duration, comment: l.comment, cost: lapCost(l.start, l.end) })),
-        finalLap,
-      ];
-
       const histRes = await supabase.from("session_history").insert({
         owner_id: ownerIdOf(currentUser), hall_name: hall ? hall.name : "", table_name: record.tableName,
         start_time: new Date(record.startTime).toISOString(), end_time: new Date(record.endTime).toISOString(),
-        duration_seconds: record.duration, table_cost: record.tableCost,
-        extras: record.extras, extras_cost: record.extrasCost, total: record.total,
+        duration_seconds: Math.round(record.duration), table_cost: tableCostR,
+        extras: record.extras, extras_cost: extrasCostR, total: totalR,
         laps: allLaps, general_note: table.note || null,
         actor_id: currentUser.id, actor_name: currentUser.name, payment_method: paymentMethod || "naqd",
         opened_by_name: table.startedByName || "",
@@ -1719,7 +1986,7 @@ export default function BilliardPOS() {
         await refreshOwnerData(null, { parts: ["halls", "warehouse", "debts"] });
         return true; // extras/laps ni o'chirmaymiz — tiklash imkoni qolsin
       }
-      buzz(); showToast(`🔴 "${table.name}" yopildi · ${fmtMoney(record.total)} · ${fmtTime(new Date())}`);
+      buzz(); showToast(`🔴 "${table.name}" yopildi · ${fmtMoney(totalR)} · ${fmtTime(new Date(nowMs()))}`);
       await Promise.all([
         supabase.from("table_extras").delete().eq("table_id", tableId),
         supabase.from("table_laps").delete().eq("table_id", tableId),
@@ -1732,15 +1999,39 @@ export default function BilliardPOS() {
     }
   }
 
-  // Faqat oxirgi o'yinlarni olib, mavjud tarixga qo'shamiz (butun tarixni qayta yuklamasdan)
-  async function mergeRecentHistory() {
-    const { data } = await supabase.from("session_history").select("*").eq("owner_id", ownerIdOf(currentUser)).order("end_time", { ascending: false }).limit(30);
-    if (!data) return;
-    const fresh = data.map(mapHistory);
+  // Tarixga yangi yozuvlarni qo'shish (dublikatsiz)
+  function mergeHistoryRows(rows) {
+    if (!rows || !rows.length) return;
+    const fresh = rows.map(mapHistory);
     setHistory((prev) => {
       const ids = new Set(fresh.map((h) => h.id));
       return [...fresh, ...(prev || []).filter((h) => !ids.has(h.id))].sort((a, b) => b.endTime - a.endTime);
     });
+  }
+  // Faqat oxirgi o'yinlarni olib, mavjud tarixga qo'shamiz (butun tarixni qayta yuklamasdan).
+  // Boshqa qurilmada yopilgan stollar ham kelishi uchun — eng yangi yozuvdan biroz oldingi vaqtdan boshlab olamiz.
+  async function mergeRecentHistory() {
+    const owner = ownerIdOf(currentUser);
+    if (!owner) return;
+    const newest = historyRef.current.length ? historyRef.current[0].endTime : null;
+    const since = newest ? newest - 15 * 60000 : historyWindowStart();
+    const rows = await fetchAllHistory(owner, since);
+    mergeHistoryRows(rows);
+  }
+  // Eski davr kerak bo'lganda (sana oralig'i tanlanganda yoki "hammasini yuklash") — yetishmagan qismini olib kelamiz
+  async function loadOlderHistory(fromTs) {
+    const loadedFrom = historySinceRef.current;
+    if (loadedFrom == null || olderLoading.current) return;
+    const from = fromTs ? Math.max(0, fromTs) : 0;
+    if (from >= loadedFrom) return;
+    olderLoading.current = true;
+    try {
+      const rows = await fetchAllHistory(ownerIdOf(currentUser), from > 0 ? from : null, loadedFrom);
+      mergeHistoryRows(rows);
+      const next = from > 0 ? from : null;
+      historySinceRef.current = next; setHistorySince(next);
+    } catch (e) { showToast("❌ Eski tarix yuklanmadi — internetni tekshiring"); }
+    finally { olderLoading.current = false; }
   }
 
   // ---- bar ----
@@ -1827,7 +2118,7 @@ export default function BilliardPOS() {
   }
   async function toggleUserSub(userId) {
     const u = users.find((x) => x.id === userId);
-    if (u.subscribed && (!u.subscriptionUntil || u.subscriptionUntil > Date.now())) {
+    if (u.subscribed && (!u.subscriptionUntil || u.subscriptionUntil > nowMs())) {
       // hozir obunasi faol (kunlik yoki cheksiz) — o'chirib qo'yamiz
       await supabase.from("users").update({ subscribed: false, subscription_until: null }).eq("id", userId);
       await loadAdmin();
@@ -1868,7 +2159,7 @@ export default function BilliardPOS() {
   }
   async function banUser(userId, days, hours, reason) {
     const ms = (Number(days) || 0) * 86400000 + (Number(hours) || 0) * 3600000;
-    await supabase.from("users").update({ banned: true, ban_until: new Date(Date.now() + ms).toISOString(), ban_reason: reason }).eq("id", userId);
+    await supabase.from("users").update({ banned: true, ban_until: new Date(nowMs() + ms).toISOString(), ban_reason: reason }).eq("id", userId);
     await loadAdmin();
   }
   async function unbanUser(userId) {
@@ -1946,7 +2237,7 @@ export default function BilliardPOS() {
   }
   async function closeShift(shiftId) {
     const r = await supabase.from("shifts").update({
-      status: "closed", closed_by: currentUser.id, closed_by_name: currentUser.name, closed_at: new Date().toISOString(),
+      status: "closed", closed_by: currentUser.id, closed_by_name: currentUser.name, closed_at: new Date(nowMs()).toISOString(),
     }).eq("id", shiftId);
     if (r.error) { showToast(`❌ Xatolik: ${r.error.message}`); return; }
     showToast(`✅ Smena yopildi`);
@@ -1968,7 +2259,7 @@ export default function BilliardPOS() {
   }
   async function viewUserPanel(user) {
     setViewUserBasic(user); setViewUserLoading(true); setViewUserContent(null);
-    const d = await fetchOwnerData(user.id);
+    const d = await fetchOwnerData(user.id, { allHistory: true });
     setViewUserContent(d); setViewUserLoading(false);
   }
 
@@ -2069,7 +2360,7 @@ export default function BilliardPOS() {
 
       {screen === "finance" && currentUser && currentUser.role === "owner" && (
         <FinanceScreen
-          history={history} warehouseLogs={warehouseLogs}
+          history={history} warehouseLogs={warehouseLogs} historySince={historySince} onNeedOlder={loadOlderHistory}
           onBack={() => setScreen("halls")}
         />
       )}
@@ -2108,7 +2399,7 @@ export default function BilliardPOS() {
         />
       )}
 
-      {screen === "stats" && currentUser && currentUser.role === "owner" && <StatsScreen history={history} shifts={shifts} warehouseLogs={warehouseLogs} warehouseItems={warehouseItems} onBack={() => setScreen("halls")} />}
+      {screen === "stats" && currentUser && currentUser.role === "owner" && <StatsScreen history={history} historySince={historySince} onNeedOlder={loadOlderHistory} shifts={shifts} warehouseLogs={warehouseLogs} warehouseItems={warehouseItems} onBack={() => setScreen("halls")} />}
       {screen === "stats" && currentUser && currentUser.role !== "owner" && <StaffDailyStats history={history} warehouseLogs={warehouseLogs} warehouseItems={warehouseItems} onBack={() => setScreen("halls")} />}
       {screen === "support" && currentUser && <SupportScreen messages={myChat} onSend={sendUserMessage} onBack={() => setScreen("halls")} />}
 
@@ -2212,7 +2503,7 @@ function TelegramReportLink({ user }) {
     const w = window.open("", "_blank");
     const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(tok));
     const hash = Array.from(new Uint8Array(dig)).map((x) => x.toString(16).padStart(2, "0")).join("");
-    const r = await supabase.from("users").update({ tg_link_token: hash, tg_link_expires: new Date(Date.now() + 30 * 60000).toISOString() }).eq("id", user.id);
+    const r = await supabase.from("users").update({ tg_link_token: hash, tg_link_expires: new Date(nowMs() + 30 * 60000).toISOString() }).eq("id", user.id);
     if (r.error) { if (w) w.close(); alert(`Xatolik: ${r.error.message}`); return; }
     const url = `${BOT_URL}?start=link_${tok}`;
     if (w) w.location.href = url; else window.location.href = url;
@@ -2259,7 +2550,7 @@ function PosikHelper({ screen, hallsCount }) {
   const [tip, setTip] = useState("");
   const [spot, setSpot] = useState(POSIK_SPOTS[0]);
   const [img, setImg] = useState("wave");
-  const [muted, setMuted] = useState(() => { try { return Number(localStorage.getItem("posik-mute-until") || 0) > Date.now(); } catch (e) { return false; } });
+  const [muted, setMuted] = useState(() => { try { return Number(localStorage.getItem("posik-mute-until") || 0) > nowMs(); } catch (e) { return false; } });
   const visibleOn = ["auth", "halls", "hall", "stats", "subscribe", "warehouse", "debts", "finance", "staff"].includes(screen);
   useEffect(() => {
     if (muted || !visibleOn) { setShow(false); return; }
@@ -2293,7 +2584,7 @@ function PosikHelper({ screen, hallsCount }) {
       </button>
       <div onClick={() => window.open(tip.startsWith("Parolni unutdingizmi") ? `${BOT_URL}?start=forgot` : supportUrl(), "_blank")} className="rounded-2xl px-3 py-2 text-xs mb-16 cursor-pointer"
         style={{ background: "#fff", color: "#3b285c", maxWidth: 190, boxShadow: "0 6px 18px rgba(0,0,0,0.3)", position: "relative", [left ? "marginLeft" : "marginRight"]: -6 }}>
-        <button onClick={(e) => { e.stopPropagation(); setShow(false); setMuted(true); try { localStorage.setItem("posik-mute-until", String(Date.now() + 30 * 60000)); } catch (er) {} }}
+        <button onClick={(e) => { e.stopPropagation(); setShow(false); setMuted(true); try { localStorage.setItem("posik-mute-until", String(nowMs() + 30 * 60000)); } catch (er) {} }}
           style={{ position: "absolute", top: -8, [left ? "right" : "left"]: -8, width: 20, height: 20, borderRadius: 10, background: "#3b285c", color: "#fff", fontSize: 11, lineHeight: "20px", border: "none" }}>✕</button>
         <div className="font-semibold mb-0.5" style={{ color: "#6e46b4" }}>Posik</div>
         {tip}
@@ -2421,7 +2712,7 @@ function AuthScreen({ onRegister, onLogin }) {
 }
 
 function BannedScreen({ user, onLogout }) {
-  const daysLeft = Math.ceil((user.banUntil - Date.now()) / 86400000);
+  const daysLeft = Math.ceil((user.banUntil - nowMs()) / 86400000);
   return (
     <div className="min-h-screen flex items-center justify-center px-5">
       <div className="w-full max-w-sm text-center">
@@ -2440,7 +2731,7 @@ function BannedScreen({ user, onLogout }) {
 // ---------------- SUBSCRIBE ----------------
 function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFreeTrial, onLogout, onBack }) {
   const [code, setCode] = useState("");
-  const active = !!(user.subscriptionUntil && user.subscriptionUntil > Date.now());
+  const active = !!(user.subscriptionUntil && user.subscriptionUntil > nowMs());
   const left = active ? subDaysLeft(user.subscriptionUntil) : 0;
   const BOT = "https://t.me/Billiard_pos_bot";
   return (
@@ -2667,11 +2958,11 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
       {user.role === "owner" && (
         <button onClick={proOn(user) ? onPromos : () => setProModal(true)} style={{ background: "linear-gradient(120deg,#5a1f45,#3d1530)", border: "1px solid #ff7ab6", opacity: proOn(user) ? 1 : 0.75 }} className="w-full py-3 mb-4 rounded-xl flex items-center justify-center gap-2 text-sm font-medium">
           <Percent size={16} style={{ color: "#ff7ab6" }} /> <span style={{ color: CREAM }}>Aksiyalar</span>{!proOn(user) && <span className="text-xs">🔒</span>}
-          {promos.some((p) => promoStatus(p, Date.now()) === "now") && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: "#ff7ab6", color: "#3a0820" }}>FAOL</span>}
+          {promos.some((p) => promoStatus(p, nowMs()) === "now") && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: "#ff7ab6", color: "#3a0820" }}>FAOL</span>}
         </button>
       )}
       {(() => {
-        const live = promos.filter((p) => promoStatus(p, Date.now()) === "now");
+        const live = promos.filter((p) => promoStatus(p, nowMs()) === "now");
         if (!live.length) return null;
         return (
           <div className="mb-4 px-4 py-3 rounded-xl flex items-center gap-2" style={{ background: "rgba(255,122,182,0.14)", border: "1px solid #ff7ab6" }}>
@@ -2927,7 +3218,7 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
   const [pickedBarItem, setPickedBarItem] = useState(null);
   const [blocks, setBlocks] = useState("");
   const [unitsPerBlock, setUnitsPerBlock] = useState("");
-  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [entryDate, setEntryDate] = useState(() => uzToday());
   const [note, setNote] = useState("");
   const [removeItem, setRemoveItem] = useState(null);
   const [rmBlocks, setRmBlocks] = useState("");
@@ -2952,7 +3243,7 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
   const repEnd = repCustomActive ? new Date(repTo + "T23:59:59").getTime() : null;
   function inRepPeriod(ts) {
     if (repCustomActive) return ts >= repStart && ts <= repEnd;
-    if (reportTab === "day") return isSameDay(ts, Date.now());
+    if (reportTab === "day") return isSameDay(ts, nowMs());
     if (reportTab === "week") return daysAgo(ts, 7);
     return daysAgo(ts, 30);
   }
@@ -3014,7 +3305,7 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
 
       {tab === "stock" && (
         <>
-          <button onClick={() => { setShowAdd(true); setPickedBarItem(null); setBlocks(""); setUnitsPerBlock(""); setNote(""); setEntryDate(new Date().toISOString().slice(0, 10)); }}
+          <button onClick={() => { setShowAdd(true); setPickedBarItem(null); setBlocks(""); setUnitsPerBlock(""); setNote(""); setEntryDate(uzToday()); }}
             style={{ background: GOLD, color: FELT_DARK }} className="w-full mb-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
             <Plus size={16} /> Tovar qo'shish
           </button>
@@ -3248,7 +3539,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [amount, setAmount] = useState("");
-  const [debtDate, setDebtDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [debtDate, setDebtDate] = useState(() => uzToday());
   const [dueDate, setDueDate] = useState("");
   const [note, setNote] = useState("");
   const [payTarget, setPayTarget] = useState(null);
@@ -3258,7 +3549,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
   const [topupAmount, setTopupAmount] = useState("");
   const [topupNote, setTopupNote] = useState("");
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = uzToday();
   const open = debts.filter((d) => d.status === "open");
   const closed = debts.filter((d) => d.status === "closed");
   const dueToday = open.filter((d) => d.dueDate && d.dueDate <= today);
@@ -3286,7 +3577,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
 
       {tab === "open" && (
         <>
-          <button onClick={() => { setShowAdd(true); setName(""); setPhone(""); setAmount(""); setDebtDate(new Date().toISOString().slice(0, 10)); setDueDate(""); setNote(""); }}
+          <button onClick={() => { setShowAdd(true); setName(""); setPhone(""); setAmount(""); setDebtDate(uzToday()); setDueDate(""); setNote(""); }}
             style={{ background: GOLD, color: FELT_DARK }} className="w-full mb-4 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2">
             <Plus size={16} /> Qarzdor qo'shish
           </button>
@@ -3449,14 +3740,18 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
 }
 
 // ---------------- MOLIYA ----------------
-function FinanceScreen({ history, warehouseLogs, onBack }) {
+function FinanceScreen({ history, warehouseLogs, historySince, onNeedOlder, onBack }) {
   const [tab, setTab] = useState("today");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const now = Date.now();
+  const now = nowMs();
   const customActive = fromDate && toDate;
   const rangeStart = customActive ? new Date(fromDate + "T00:00:00").getTime() : null;
   const rangeEnd = customActive ? new Date(toDate + "T23:59:59").getTime() : null;
+  useEffect(() => {
+    if (rangeStart && historySince && rangeStart < historySince && onNeedOlder) onNeedOlder(rangeStart);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeStart, historySince]);
   function inPeriod(ts) {
     if (customActive) return ts >= rangeStart && ts <= rangeEnd;
     if (tab === "today") return isSameDay(ts, now);
@@ -3666,7 +3961,7 @@ function promoScopeText(p, halls) {
 function PromosScreen({ halls, promos, onBack, onSave, onEnd, onDelete }) {
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
-  const now = Date.now();
+  const now = nowMs();
   function openNew() {
     const today = nowUzDateStr();
     setForm({ id: null, name: "Kunduzgi aksiya", price: "", startDate: today, endDate: addDaysStr(today, 30), startTime: "10:00", endTime: "17:00", scope: "all", hallId: halls[0] ? halls[0].id : "", tableIds: [] });
@@ -3769,12 +4064,12 @@ function PromosScreen({ halls, promos, onBack, onSave, onEnd, onDelete }) {
 }
 
 function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onBack, onCreateTable, onEditTable, onDeleteTable, onStart, onPause, onResume, onTransfer, onAddExtrasBatch, onAddExtraTime, onClose, onUpdateNote, onAddLap, onToast }) {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(nowMs());
   const hallPlaying = !!hall && hall.tables.some((t) => t.status === "playing");
   useEffect(() => {
-    setNow(Date.now());
+    setNow(nowMs());
     if (!hallPlaying) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => setNow(nowMs()), 1000);
     return () => clearInterval(id);
   }, [hallPlaying]);
   const [showCreate, setShowCreate] = useState(false);
@@ -3992,8 +4287,11 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
         <Modal onClose={() => setEditTableObj(null)}>
           <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Stolni tahrirlash</h2>
           <input value={tName} onChange={(e) => setTName(e.target.value)} className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-          <input value={tRate} onChange={(e) => setTRate(e.target.value.replace(/[^0-9]/g, ""))} className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-          <button onClick={() => { onEditTable(editTableObj.id, tName.trim(), Number(tRate)); setEditTableObj(null); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm">Saqlash</button>
+          <input value={tRate} disabled={editTableObj.status !== "free"} onChange={(e) => setTRate(e.target.value.replace(/[^0-9]/g, ""))} className="w-full mb-2 px-4 py-3 rounded-xl outline-none text-sm font-mono disabled:opacity-50" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
+          {editTableObj.status !== "free"
+            ? <p className="text-xs mb-4" style={{ color: "#e8b04a" }}>Stol band — narxni o'yin tugagach o'zgartiring (aks holda butun o'yin yangi narxda hisoblanib ketadi).</p>
+            : <div className="mb-2" />}
+          <button disabled={!tName.trim() || (editTableObj.status === "free" && !Number(tRate))} onClick={() => { onEditTable(editTableObj.id, tName.trim(), editTableObj.status !== "free" ? editTableObj.rate : Number(tRate)); setEditTableObj(null); }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm">Saqlash</button>
         </Modal>
       )}
 
@@ -4029,7 +4327,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
                 className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
               {startAmount && (
                 <div className="text-xs mt-2" style={{ color: GOLD }}>
-                  ≈ {fmtDuration(secondsForAmount(confirmStart, hall.id, promos, Date.now(), Number(startAmount)))} vaqt beriladi, tugaganda ovozli ogohlantirish keladi
+                  ≈ {fmtDuration(secondsForAmount(confirmStart, hall.id, promos, nowMs(), Number(startAmount)))} vaqt beriladi, tugaganda ovozli ogohlantirish keladi
                 </div>
               )}
             </div>
@@ -4041,7 +4339,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
               disabled={startMode === "amount" && !startAmount}
               onClick={() => {
                 if (startMode === "amount" && startAmount) {
-                  const targetSeconds = secondsForAmount(confirmStart, hall.id, promos, Date.now(), Number(startAmount));
+                  const targetSeconds = secondsForAmount(confirmStart, hall.id, promos, nowMs(), Number(startAmount));
                   onStart(confirmStart.id, targetSeconds, Number(startAmount));
                 } else {
                   onStart(confirmStart.id, null, null);
@@ -4130,16 +4428,17 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
           <div className="flex gap-2">
             <button onClick={() => setConfirmClose(null)} className="flex-1 py-3 rounded-xl text-sm" style={{ background: FELT_DARK, color: CREAM }}>Bekor</button>
             <button onClick={() => {
-              const endTime = Date.now();
+              const endTime = nowMs();
               const existingLaps = confirmClose.laps || [];
               const lastCheckpoint = existingLaps.length > 0 ? Math.max(...existingLaps.map((l) => l.end)) : confirmClose.startTime;
               const finalDuration = Math.max(0, (endTime - lastCheckpoint) / 1000);
               const previewLaps = [
-                ...existingLaps.map((l) => ({ duration: l.duration, comment: l.comment, cost: lapCostOf(confirmClose, l.start, l.end, endTime) })),
-                { duration: finalDuration, comment: "", cost: lapCostOf(confirmClose, lastCheckpoint, endTime, endTime) },
+                ...existingLaps.map((l) => ({ duration: l.duration, comment: l.comment, cost: Math.round(lapCostOf(confirmClose, l.start, l.end, endTime)) })),
+                { duration: finalDuration, comment: "", cost: Math.round(lapCostOf(confirmClose, lastCheckpoint, endTime, endTime)) },
               ];
               const ch = chargeOf(confirmClose, endTime);
-              setReceipt({ table: confirmClose, startTime: confirmClose.startTime, endTime, duration: elapsedSeconds(confirmClose), tableCost: ch.cost, breakdown: ch.segments, extras: confirmClose.extras, extrasCost: extrasTotal(confirmClose), laps: previewLaps, generalNote: confirmClose.note });
+              // closeId — shu chekning noyob belgisi: qayta bosilsa ham bitta chek yoziladi
+              setReceipt({ closeId: newUuid(), table: confirmClose, startTime: confirmClose.startTime, endTime, duration: elapsedSeconds(confirmClose), tableCost: Math.round(ch.cost), breakdown: ch.segments, extras: confirmClose.extras, extrasCost: extrasTotal(confirmClose), laps: previewLaps, generalNote: confirmClose.note });
               setConfirmClose(null);
             }} style={{ background: RED, color: "#fff" }} className="flex-1 py-3 rounded-xl text-sm font-semibold">Yopish</button>
           </div>
@@ -4289,7 +4588,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
           <button disabled={closing} onClick={async () => {
             if (closing) return;
             setClosing(true);
-            const ok = await onClose(receipt.table.id, { tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost }, paymentMethod);
+            const ok = await onClose(receipt.table.id, { closeId: receipt.closeId, expectedStart: receipt.table.startTime, extraIds: (receipt.extras || []).map((e) => e.id).filter(Boolean), tableName: receipt.table.name, startTime: receipt.startTime, endTime: receipt.endTime, duration: receipt.duration, tableCost: receipt.tableCost, extras: receipt.extras, extrasCost: receipt.extrasCost, total: receipt.tableCost + receipt.extrasCost }, paymentMethod);
             if (ok !== false) setReceipt(null); // yopilmasa oyna qoladi — qayta bosish mumkin
             setClosing(false);
           }} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 mt-2 disabled:opacity-50">
@@ -4360,15 +4659,12 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
 
 // ---------------- STATS ----------------
 function businessDayRange(now) {
-  const d = new Date(now);
-  if (d.getHours() < 8) d.setDate(d.getDate() - 1);
-  d.setHours(8, 0, 0, 0);
-  const start = d.getTime();
+  const start = uzBusinessDayStart(now); // Toshkent vaqti bo'yicha 08:00 — telefon mintaqasiga bog'liq emas
   return [start, start + 24 * 3600 * 1000];
 }
 function StaffDailyStats({ history, warehouseLogs, warehouseItems, onBack }) {
   const [selected, setSelected] = useState(null);
-  const [start, end] = businessDayRange(Date.now());
+  const [start, end] = businessDayRange(nowMs());
   const directEntries = (warehouseLogs || []).filter((l) => l.type === "direct").map((l) => {
     const wi = (warehouseItems || []).find((w) => w.id === l.warehouseItemId);
     const qty = -l.changeUnits;
@@ -4408,10 +4704,36 @@ function StaffDailyStats({ history, warehouseLogs, warehouseItems, onBack }) {
     </div>
   );
 }
-function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack }) {
+// Uzun ro'yxatlarni bir yo'la chizmaymiz (telefon qotmasligi uchun) — guruhlar saqlanadi, elementlar soni cheklanadi
+function capGroups(groups, limit) {
+  const out = []; let left = limit;
+  for (const g of groups) {
+    if (left <= 0) break;
+    out.push(g.items.length <= left ? g : { ...g, items: g.items.slice(0, left), cut: true });
+    left -= g.items.length;
+  }
+  return out;
+}
+function HistoryWindowNote({ historySince, onNeedOlder }) {
+  const [busy, setBusy] = useState(false);
+  if (!historySince) return null;
+  return (
+    <div className="rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-3" style={{ background: FELT_DARK, border: `1px dashed ${FELT_LIGHT}` }}>
+      <span className="text-xs" style={{ color: "#b8c9bf" }}>Tez ishlashi uchun {fmtDate(historySince)} dan keyingi tarix ko'rsatilmoqda. Eskisi bazada saqlangan.</span>
+      <button disabled={busy} onClick={async () => { setBusy(true); try { await onNeedOlder(0); } finally { setBusy(false); } }}
+        className="text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap disabled:opacity-50" style={{ background: GOLD, color: FELT_DARK }}>
+        {busy ? "Yuklanmoqda…" : "Hammasini yuklash"}
+      </button>
+    </div>
+  );
+}
+
+function StatsScreen({ history, historySince, onNeedOlder, shifts, warehouseLogs, warehouseItems, onBack }) {
   const [selected, setSelected] = useState(null);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [visible, setVisible] = useState(80);
+  const [visibleRange, setVisibleRange] = useState(80);
   const [methodTab, setMethodTab] = useState("all"); // all | naqd | karta
 
   const directEntries = (warehouseLogs || []).filter((l) => l.type === "direct").map((l) => {
@@ -4432,7 +4754,7 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
 
   const filtered = methodTab === "all" ? combined : combined.filter((h) => (h.paymentMethod || "naqd") === methodTab);
 
-  const today = filtered.filter((h) => isSameDay(h.endTime, Date.now()));
+  const today = filtered.filter((h) => isSameDay(h.endTime, nowMs()));
   const week = filtered.filter((h) => daysAgo(h.endTime, 7));
   const month = filtered.filter((h) => daysAgo(h.endTime, 30));
   const summarize = (list) => ({ count: list.length, total: list.reduce((s, h) => s + h.total, 0) });
@@ -4444,6 +4766,12 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
   const rangeEnd = rangeActive ? new Date(toDate + "T23:59:59").getTime() : null;
   const rangeList = rangeActive ? filtered.filter((h) => h.endTime >= rangeStart && h.endTime <= rangeEnd) : [];
   const rangeSummary = summarize(rangeList);
+  // Tanlangan sana hali yuklanmagan eski davrga tushsa — o'sha qismini bazadan olib kelamiz
+  useEffect(() => {
+    if (rangeStart && historySince && rangeStart < historySince && onNeedOlder) onNeedOlder(rangeStart);
+    setVisibleRange(80);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeStart, historySince]);
 
   function groupByShift(list) {
     const sorted = [...(shifts || [])].sort((a, b) => b.openedAt - a.openedAt);
@@ -4460,13 +4788,16 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
     return groups;
   }
   // smena bo'yicha guruhlash
-  const shiftGroups = rangeActive ? groupByShift(rangeList) : [];
-  const allShiftGroups = groupByShift(filtered);
+  const shiftGroups = capGroups(rangeActive ? groupByShift(rangeList) : [], visibleRange);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const allShiftGroupsFull = useMemo(() => groupByShift(filtered), [history, warehouseLogs, warehouseItems, methodTab, shifts]);
+  const allShiftGroups = capGroups(allShiftGroupsFull, visible);
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
       <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
       <h1 className="font-display text-2xl font-semibold mb-4" style={{ color: CREAM }}>Statistika</h1>
+      <HistoryWindowNote historySince={historySince} onNeedOlder={onNeedOlder} />
 
       <div className="flex gap-2 mb-5">
         <button onClick={() => setMethodTab("all")} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: methodTab === "all" ? GOLD : FELT, color: methodTab === "all" ? FELT_DARK : CREAM }}>Umumiy</button>
@@ -4511,6 +4842,11 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
                   </div>
                 </div>
               ))}
+              {rangeList.length > visibleRange && (
+                <button onClick={() => setVisibleRange((v) => v + 200)} className="w-full py-2.5 rounded-lg text-xs font-semibold" style={{ background: FELT_DARK, color: GOLD, border: `1px solid ${FELT_LIGHT}` }}>
+                  Yana ko'rsatish ({rangeList.length - visibleRange} ta qoldi)
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -4536,9 +4872,16 @@ function StatsScreen({ history, shifts, warehouseLogs, warehouseItems, onBack })
             ))}
           </div>
         ))}
+        {filtered.length > visible && (
+          <div className="px-5 py-3">
+            <button onClick={() => setVisible((v) => v + 200)} className="w-full py-2.5 rounded-lg text-xs font-semibold" style={{ background: FELT_DARK, color: GOLD, border: `1px solid ${FELT_LIGHT}` }}>
+              Yana ko'rsatish ({filtered.length - visible} ta qoldi)
+            </button>
+          </div>
+        )}
         {filtered.length > 0 && (
           <div className="flex justify-between items-baseline px-5 py-4 mt-2" style={{ background: FELT_DARK }}>
-            <span className="font-display font-semibold" style={{ color: CREAM }}>Jami ({methodTab === "all" ? "hammasi" : methodTab})</span>
+            <span className="font-display font-semibold" style={{ color: CREAM }}>Jami ({methodTab === "all" ? "hammasi" : methodTab}{historySince ? `, ${fmtDate(historySince)} dan` : ""})</span>
             <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(grandTotal)}</span>
           </div>
         )}
@@ -4626,7 +4969,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
 
   const subscribed = users.filter((u) => u.subscribed || u.accountType === "vip").length;
   const vipCount = users.filter((u) => u.accountType === "vip").length;
-  const activePromos = promoCodes.filter((p) => !p.used && (p.expiry === null || p.expiry >= Date.now())).length;
+  const activePromos = promoCodes.filter((p) => !p.used && (p.expiry === null || p.expiry >= nowMs())).length;
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
@@ -4725,8 +5068,8 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                   </div>
                 )}
                 {u.subscribed && u.subscriptionUntil && u.accountType !== "vip" && (
-                  <div className="text-xs mb-3" style={{ color: u.subscriptionUntil > Date.now() ? "#7bbf6a" : "#e88" }}>
-                    Obuna: {u.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(u.subscriptionUntil)} gacha
+                  <div className="text-xs mb-3" style={{ color: u.subscriptionUntil > nowMs() ? "#7bbf6a" : "#e88" }}>
+                    Obuna: {u.subscriptionUntil > nowMs() ? "faol, " : "tugagan, "}{fmtDate(u.subscriptionUntil)} gacha
                   </div>
                 )}
                 {u.subscribed && !u.subscriptionUntil && u.accountType !== "vip" && (
@@ -4739,9 +5082,9 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                 )}
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => onToggleSub(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
-                    {u.subscribed && (!u.subscriptionUntil || u.subscriptionUntil > Date.now()) ? "Obunani o'chirish" : "Obuna berish"}
+                    {u.subscribed && (!u.subscriptionUntil || u.subscriptionUntil > nowMs()) ? "Obunani o'chirish" : "Obuna berish"}
                   </button>
-                  {u.subscribed && u.subscriptionUntil && u.subscriptionUntil > Date.now() && (
+                  {u.subscribed && u.subscriptionUntil && u.subscriptionUntil > nowMs() && (
                     <button onClick={() => onAddDays(u.id)} className="text-xs px-3 py-1.5 rounded-lg font-medium" style={{ background: FELT_DARK, color: GOLD, border: `1px solid ${GOLD}` }}>+ Kun qo'shish</button>
                   )}
                   {u.accountType !== "vip" && (
@@ -5040,7 +5383,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
 }
 
 function UserPanelView({ user, halls, bar, history, shifts }) {
-  const today = history.filter((h) => isSameDay(h.endTime, Date.now()));
+  const today = history.filter((h) => isSameDay(h.endTime, nowMs()));
   const week = history.filter((h) => daysAgo(h.endTime, 7));
   const month = history.filter((h) => daysAgo(h.endTime, 30));
   const summarize = (list) => ({ count: list.length, total: list.reduce((s, h) => s + h.total, 0) });
@@ -5075,8 +5418,8 @@ function UserPanelView({ user, halls, bar, history, shifts }) {
         <p className="text-xs mb-1" style={{ color: "#7bbf6a" }}>Smena: {openShiftObj.openedByName} · {fmtDate(openShiftObj.openedAt)} · {fmtTime(openShiftObj.openedAt)} dan beri</p>
       )}
       {user.subscribed && user.subscriptionUntil && user.accountType !== "vip" && (
-        <p className="text-xs mb-4" style={{ color: user.subscriptionUntil > Date.now() ? "#7bbf6a" : "#e88" }}>
-          Obuna: {user.subscriptionUntil > Date.now() ? "faol, " : "tugagan, "}{fmtDate(user.subscriptionUntil)} gacha
+        <p className="text-xs mb-4" style={{ color: user.subscriptionUntil > nowMs() ? "#7bbf6a" : "#e88" }}>
+          Obuna: {user.subscriptionUntil > nowMs() ? "faol, " : "tugagan, "}{fmtDate(user.subscriptionUntil)} gacha
         </p>
       )}
 
