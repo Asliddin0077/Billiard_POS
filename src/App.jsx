@@ -7,16 +7,143 @@ import {
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
-const FELT = "#0b3d2e";
-const FELT_DARK = "#082b20";
-const FELT_LIGHT = "#124a37";
-const CREAM = "#f3ecdd";
-const GOLD = "#c9a227";
-const RED = "#b23a3a";
+// Ranglar mavzuga qarab o'zgaradi (CSS o'zgaruvchilari). "Odatiy" mavzuda qiymatlar avvalgidek.
+const FELT = "var(--pos-felt)";
+const FELT_DARK = "var(--pos-felt-dark)";
+const FELT_LIGHT = "var(--pos-felt-light)";
+const CREAM = "var(--pos-cream)";
+const GOLD = "var(--pos-gold)";
+const RED = "var(--pos-red)";
+
+// ---- Mavzu (tema) ----
+const THEME_KEY = "billiard-pos-theme";
+const THEME_OFFER_KEY = "billiard-pos-theme-offer-v1";
+function readTheme() {
+  try {
+    const q = new URLSearchParams(window.location.search).get("mavzu"); // sinov uchun: ?mavzu=miami yoki ?mavzu=odatiy
+    if (q === "miami" || q === "odatiy") { localStorage.setItem(THEME_KEY, q === "miami" ? "miami" : "classic"); }
+    return localStorage.getItem(THEME_KEY) === "miami" ? "miami" : "classic";
+  } catch (e) { return "classic"; }
+}
+var CUR_THEME = readTheme();
+const THEME_CSS = `
+:root{--pos-felt:#0b3d2e;--pos-felt-dark:#082b20;--pos-felt-light:#124a37;--pos-cream:#f3ecdd;--pos-gold:#c9a227;--pos-red:#b23a3a;--pos-muted:#b8c9bf;--pos-muted2:#8fa398;--pos-bg:#082b20}
+html[data-theme=miami]{--pos-felt:rgba(30,8,52,.80);--pos-felt-dark:rgba(16,5,30,.90);--pos-felt-light:rgba(255,95,168,.55);--pos-cream:#fff1f8;--pos-gold:#ffbf5a;--pos-red:#ff3d7f;--pos-muted:#f0c4dd;--pos-muted2:#d6a3c4;--pos-bg:transparent}
+html[data-theme=miami],html[data-theme=miami] body{background:#12061f}
+html[data-theme=miami] .font-display{font-family:'Montserrat','Inter',sans-serif!important;font-style:italic;font-weight:800!important;letter-spacing:.2px}
+html[data-theme=miami] [style*="border: 1px solid var(--pos-felt-light)"]{box-shadow:0 0 10px rgba(255,95,168,.28)}
+html[data-theme=miami] [style*="background: var(--pos-gold)"]{background:linear-gradient(90deg,#ffd76a,#ff9f43)!important;box-shadow:0 0 12px rgba(255,159,67,.45)}
+html[data-theme=miami] [style*="background: var(--pos-red)"]{background:linear-gradient(90deg,#ff3d8b,#ff7a59)!important;box-shadow:0 0 12px rgba(255,61,139,.45)}
+html[data-theme=miami] .pos-table{background:rgba(26,7,46,.80)!important}
+html[data-theme=miami] .pos-table[data-st=play]{border-color:#2ef2e0!important;box-shadow:0 0 14px rgba(46,242,224,.5),inset 0 0 12px rgba(46,242,224,.14)!important}
+html[data-theme=miami] .pos-table[data-st=pause]{border-color:#ffbf5a!important;box-shadow:0 0 12px rgba(255,191,90,.4)!important}
+html[data-theme=miami] .pos-table[data-st=promo]{border-color:#ff5fa8!important;box-shadow:0 0 16px rgba(255,95,168,.55)!important}
+html[data-theme=miami] .pos-table .font-mono{font-family:'Anton','Inter',sans-serif!important;letter-spacing:1px}
+html[data-theme=miami] .pos-table[data-st=play] .font-mono{color:#2ef2e0!important;text-shadow:0 0 10px rgba(46,242,224,.8)}
+html[data-theme=miami] .pos-hd{background:linear-gradient(180deg,#fff 0%,#ffe08a 40%,#ff6fae 72%,#c03fff 100%);-webkit-background-clip:text;background-clip:text;color:transparent!important;filter:drop-shadow(0 2px 0 #2a0b3d) drop-shadow(0 0 10px rgba(255,90,170,.5))}
+.pos-logo-text{font-family:'Montserrat','Inter',sans-serif;font-weight:800;font-style:italic;font-size:20px;line-height:1;letter-spacing:.3px;
+ background:linear-gradient(180deg,#fff 0%,#ffe9f4 38%,#ff9ccc 52%,#fff 56%,#ffd1e8 100%);-webkit-background-clip:text;background-clip:text;color:transparent;
+ filter:drop-shadow(0 2px 0 #c22f7e) drop-shadow(0 4px 0 #6d1a52) drop-shadow(0 5px 6px rgba(0,0,0,.5))}
+.pos-logo-tag{position:absolute;right:-16px;top:0;transform:rotate(6deg);font-family:'Lora',Georgia,serif;font-style:italic;font-weight:700;font-size:10px;white-space:nowrap;color:#fff;
+ padding:2px 9px;border-radius:10px 10px 10px 2px;background:linear-gradient(90deg,#ff3d8b,#ff8a4c);box-shadow:0 0 10px rgba(255,61,139,.7),0 2px 0 #7a1446}
+.pos-sky{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden;background:linear-gradient(180deg,#1a0b3a 0%,#4b1468 28%,#b8327a 52%,#ff7a59 66%,#ffb86b 72%,#2a0f3d 72.4%,#12061f 100%)}
+.pos-sun{position:absolute;left:50%;top:52%;width:52vmin;height:52vmin;max-width:340px;max-height:340px;transform:translate(-50%,-50%);border-radius:50%;background:linear-gradient(180deg,#fff2a8,#ffb347 45%,#ff4f8b);
+ -webkit-mask:linear-gradient(180deg,#000 55%,transparent 55% 59%,#000 59% 66%,transparent 66% 71%,#000 71% 78%,transparent 78% 84%,#000 84%);mask:linear-gradient(180deg,#000 55%,transparent 55% 59%,#000 59% 66%,transparent 66% 71%,#000 71% 78%,transparent 78% 84%,#000 84%)}
+.pos-sea{position:absolute;left:0;right:0;top:72.4%;bottom:0;background:repeating-linear-gradient(180deg,rgba(255,120,170,.22) 0 2px,transparent 2px 9px)}
+.pos-dim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(10,3,20,.45),rgba(10,3,20,.25) 40%,rgba(10,3,20,.65))}
+@keyframes posFall{0%{transform:translateY(-12vh) rotate(0)}100%{transform:translateY(112vh) rotate(540deg)}}
+@keyframes posFlick{0%,19%,23%,60%,64%,100%{opacity:1}20%,22%,61%,63%{opacity:.35}}
+@keyframes posPop{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.08);opacity:1}100%{transform:scale(1)}}
+@media (prefers-reduced-motion: reduce){.pos-anim{animation:none!important}}
+`;
+// Mavzu CSS'ini ilova yuklanishi bilanoq qo'shamiz (yuklanish ekranida ham ranglar to'g'ri bo'lsin)
+try {
+  if (typeof document !== "undefined" && !document.getElementById("pos-theme-css")) {
+    const st = document.createElement("style"); st.id = "pos-theme-css"; st.textContent = THEME_CSS; document.head.appendChild(st);
+    document.documentElement.setAttribute("data-theme", CUR_THEME);
+  }
+} catch (e) {}
+// Miami mavzusi shriftlari — faqat shu mavzu tanlanganda yuklanadi (Odatiy mavzuda internetga yuk yo'q)
+function ensureThemeFonts(theme) {
+  if (theme !== "miami") return;
+  try {
+    if (document.getElementById("pos-miami-fonts")) return;
+    const l = document.createElement("link"); l.id = "pos-miami-fonts"; l.rel = "stylesheet";
+    l.href = "https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@1,700;1,800&family=Anton&family=Lora:ital,wght@1,700&display=swap";
+    document.head.appendChild(l);
+  } catch (e) {}
+}
+// O'zimiz chizgan yaltiroq billiard shari (emoji o'rniga, faqat Miami mavzusida)
+function BallSvg({ size = 22 }) {
+  const id = useMemo(() => "pb" + Math.random().toString(36).slice(2, 8), []);
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" style={{ display: "inline-block", verticalAlign: "middle", flex: "none", filter: "drop-shadow(0 2px 3px rgba(0,0,0,.55)) drop-shadow(0 0 6px rgba(255,90,170,.45))" }}>
+      <defs>
+        <radialGradient id={id + "a"} cx="38%" cy="32%" r="70%"><stop offset="0" stopColor="#5a5a6e" /><stop offset=".35" stopColor="#16161f" /><stop offset=".85" stopColor="#050508" /><stop offset="1" stopColor="#000" /></radialGradient>
+        <linearGradient id={id + "r"} x1="0" y1="1" x2="1" y2="0"><stop offset="0" stopColor="#ff4f9a" stopOpacity=".9" /><stop offset=".5" stopColor="#ff4f9a" stopOpacity="0" /><stop offset="1" stopColor="#2ef2e0" stopOpacity=".8" /></linearGradient>
+        <radialGradient id={id + "h"} cx="50%" cy="50%" r="50%"><stop offset="0" stopColor="#fff" stopOpacity=".95" /><stop offset="1" stopColor="#fff" stopOpacity="0" /></radialGradient>
+        <radialGradient id={id + "w"} cx="40%" cy="35%" r="70%"><stop offset="0" stopColor="#fff" /><stop offset="1" stopColor="#d9dbe6" /></radialGradient>
+      </defs>
+      <circle cx="32" cy="32" r="30" fill={`url(#${id}a)`} />
+      <circle cx="32" cy="32" r="29.2" fill="none" stroke={`url(#${id}r)`} strokeWidth="2.2" />
+      <circle cx="30" cy="28" r="11.5" fill={`url(#${id}w)`} />
+      <text x="30" y="33.5" textAnchor="middle" fontFamily="Inter, sans-serif" fontWeight="800" fontSize="15" fill="#111">8</text>
+      <ellipse cx="22" cy="15" rx="12" ry="6.5" transform="rotate(-28 22 15)" fill={`url(#${id}h)`} opacity=".85" />
+    </svg>
+  );
+}
+function TableIco() {
+  return CUR_THEME === "miami" ? <BallSvg size={16} /> : <span>🎯</span>;
+}
+function Ball({ size = 20 }) {
+  return CUR_THEME === "miami" ? <BallSvg size={size} /> : <span>🎱</span>;
+}
+// Miami fon: osmon, quyosh, dengiz, palmalar — rasm emas, kod bilan chizilgan
+function MiamiBackdrop() {
+  const palm = (style, flip) => (
+    <svg style={{ position: "absolute", bottom: "27%", transformOrigin: "bottom", transform: flip ? "scaleX(-1)" : "none", ...style }} width="120" height="230" viewBox="0 0 120 230">
+      <path d="M58 230 C62 170 70 120 64 70" stroke="#14061f" strokeWidth="7" fill="none" strokeLinecap="round" />
+      <g fill="#14061f"><path d="M64 70 C40 50 15 55 2 72 C22 62 42 64 64 74Z" /><path d="M64 70 C50 40 30 30 8 34 C30 40 48 52 63 72Z" />
+        <path d="M64 70 C70 40 88 26 112 28 C92 36 78 50 66 72Z" /><path d="M64 70 C88 56 108 62 118 80 C100 70 84 70 65 74Z" /><path d="M64 70 C62 45 66 25 76 8 C72 30 70 50 66 70Z" /></g>
+    </svg>
+  );
+  return (
+    <div className="pos-sky" aria-hidden="true">
+      <div className="pos-sun" /><div className="pos-sea" />
+      {palm({ left: -24, height: "34vh", width: "auto" })}
+      {palm({ right: -20, height: "30vh", width: "auto" }, true)}
+      {palm({ left: "12%", height: "20vh", width: "auto", opacity: .9 })}
+      <div className="pos-dim" />
+    </div>
+  );
+}
+// Miami mavzusidagi tabrik: neon raqam + pul yomg'iri + bugungi tushum
+function MiamiCelebrate({ n, total, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 5000); return () => clearTimeout(t); }, []);
+  const bills = Array.from({ length: 26 }, (_, i) => i);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(10,2,22,.72)", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {bills.map((i) => (
+        <span key={i} className="pos-anim" style={{ position: "absolute", top: 0, left: `${(i * 37) % 96}%`, width: 34, height: 18, borderRadius: 3, background: "linear-gradient(90deg,#3ddc84,#1f9d5b)", border: "1px solid #c8ffd9",
+          boxShadow: "0 2px 4px rgba(0,0,0,.4)", color: "#e9fff1", fontSize: 10, fontWeight: 900, display: "grid", placeItems: "center",
+          animation: `posFall ${2.6 + (i % 5) * 0.5}s linear ${(i % 9) * 0.25}s infinite` }}>$</span>
+      ))}
+      <div className="pos-anim" style={{ position: "relative", textAlign: "center", animation: "posPop .6s ease-out" }}>
+        <div style={{ fontFamily: "Anton, Inter, sans-serif", fontSize: 15, letterSpacing: 6, color: "#2ef2e0", textShadow: "0 0 6px #2ef2e0,0 0 18px #2ef2e0" }}>★ BUGUNGI REKORD ★</div>
+        <div className="pos-anim" style={{ fontFamily: "Anton, Inter, sans-serif", fontStyle: "italic", fontSize: 150, lineHeight: 1, color: "#fff", margin: "4px 0",
+          textShadow: "0 0 6px #ff4f9a,0 0 16px #ff4f9a,0 0 36px #ff4f9a,0 0 70px #ff2f80", animation: "posFlick 2.4s linear infinite" }}>{n}</div>
+        <div style={{ fontFamily: "Anton, Inter, sans-serif", fontSize: 30, letterSpacing: 4, color: "#ffe08a", textShadow: "0 0 8px #ffb347,0 0 22px #ff9f43" }}>TA STOL!</div>
+        {total > 0 && <div style={{ marginTop: 12, fontFamily: "Anton, Inter, sans-serif", fontSize: 22, letterSpacing: 1, color: "#7dffb0", textShadow: "0 0 10px rgba(61,220,132,.7)" }}>+{fmtMoney(total)}</div>}
+        <button onClick={onClose} style={{ marginTop: 20, fontFamily: "Anton, Inter, sans-serif", letterSpacing: 1, fontSize: 15, padding: "8px 30px", border: "none", borderRadius: 4, color: "#fff",
+          background: "linear-gradient(90deg,#ff3d8b,#ff7a59)", transform: "skew(-10deg)", boxShadow: "0 0 14px rgba(255,61,139,.6)" }}>ZO'R! ▸</button>
+      </div>
+    </div>
+  );
+}
 const MENU_COLORS = ["#c9a227", "#4fb0d1", "#d1654f", "#7bbf6a", "#b569c9", "#d19a4f"];
 const SESSION_KEY = "billiard-pos-session";
 const SINGLE_DEVICE_LOGIN = false; // true qilsangiz — bitta akaunt faqat bitta qurilmadan kira oladi
-const APP_VERSION = "2.9.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
+const APP_VERSION = "3.0.0"; // Har safar yangi versiya chiqarganda shu raqamni oshiring (masalan "2.2.1")
 
 // ---------------- TIL (uz / ru) ----------------
 // Matnlar o'zbekcha yoziladi; "ru" tanlanganda ekrandagi matn lug'at bo'yicha ruschaga o'giriladi.
@@ -1046,6 +1173,22 @@ async function fetchAdminData() {
 
 export default function BilliardPOS() {
   const [celebrate, setCelebrate] = useState(null);
+  // Mavzu: "classic" (Odatiy) yoki "miami"
+  const [theme, setThemeState] = useState(CUR_THEME);
+  const [showThemeOffer, setShowThemeOffer] = useState(false);
+  function applyTheme(t) {
+    CUR_THEME = t === "miami" ? "miami" : "classic";
+    try { localStorage.setItem(THEME_KEY, CUR_THEME); } catch (e) {}
+    setThemeState(CUR_THEME);
+  }
+  function closeThemeOffer() {
+    try { localStorage.setItem(THEME_OFFER_KEY, "1"); } catch (e) {}
+    setShowThemeOffer(false);
+  }
+  useEffect(() => {
+    try { document.documentElement.setAttribute("data-theme", theme); } catch (e) {}
+    ensureThemeFonts(theme);
+  }, [theme]);
   useEffect(() => { startI18n(); }, []);
   const [loaded, setLoaded] = useState(false);
   const [screen, setScreen] = useState("auth");
@@ -1122,6 +1265,15 @@ export default function BilliardPOS() {
   const [promos, setPromos] = useState([]);
   const [history, setHistory] = useState([]);
   useEffect(() => { historyRef.current = history || []; }, [history]);
+  // Yangi mavzuni taklif qilish: ilovaga kirgach bir marta (qurilma bo'yicha)
+  useEffect(() => {
+    if (!currentUser || theme === "miami" || celebrate) return; // tabrik ochiq bo'lsa — kutamiz
+    if (!["halls", "hall"].includes(screen)) return;
+    let seen = false; try { seen = !!localStorage.getItem(THEME_OFFER_KEY); } catch (e) { seen = true; }
+    if (seen) return;
+    const t = setTimeout(() => setShowThemeOffer(true), 1500);
+    return () => clearTimeout(t);
+  }, [currentUser, screen, theme, celebrate]);
   // Server soatini aniqlash: ochilganda, har 10 daqiqada va ilovaga qaytilganda.
   // Telefon soati noto'g'ri bo'lsa ham hisob server vaqti bilan yuritiladi; 2 daqiqadan katta farq bo'lsa — ogohlantiramiz.
   const clockWarned = useRef(false);
@@ -1457,7 +1609,8 @@ export default function BilliardPOS() {
     const reached = [50, 100, 150, 200].filter((m) => n >= m);
     if (!reached.length) return;
     const m = reached[reached.length - 1];
-    const key = `posik-cel-${ownerIdOf(currentUser)}-${start.getFullYear()}-${start.getMonth() + 1}-${start.getDate()}-${m}`;
+    const dayTag = new Date(startMs + UZ_OFFSET).toISOString().slice(0, 10); // Toshkent bo'yicha ish kuni sanasi
+    const key = `posik-cel-${ownerIdOf(currentUser)}-${dayTag}-${m}`;
     try { if (localStorage.getItem(key)) return; localStorage.setItem(key, "1"); } catch (e) { return; }
     setCelebrate(m);
   }, [history, currentUser]);
@@ -2272,7 +2425,8 @@ export default function BilliardPOS() {
   return (
     <div
       onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
-      style={{ background: FELT_DARK, minHeight: "100vh", fontFamily: "Inter, sans-serif", paddingTop: "var(--safe-top)", paddingBottom: "var(--safe-bottom)" }} className="text-white">
+      style={{ background: "var(--pos-bg)", minHeight: "100vh", fontFamily: "Inter, sans-serif", paddingTop: "var(--safe-top)", paddingBottom: "var(--safe-bottom)", position: "relative", isolation: "isolate" }} className="text-white">
+      {theme === "miami" && <MiamiBackdrop />}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
         .font-display{font-family:'Space Grotesk',sans-serif;}
@@ -2320,13 +2474,34 @@ export default function BilliardPOS() {
 
       {(() => { SUPPORT_UID = currentUser ? currentUser.id : null; return null; })()}
       {!isAdmin && screen !== "admin" && (!currentUser || currentUser.posikEnabled !== false) && <PosikHelper screen={screen} hallsCount={halls.length} />}
-      {celebrate && <PosikCelebrate n={celebrate} onClose={() => setCelebrate(null)} />}
+      {celebrate && (theme === "miami"
+        ? <MiamiCelebrate n={celebrate} total={(history || []).filter((h) => h.endTime >= uzBusinessDayStart(nowMs())).reduce((a, h) => a + (h.total || 0), 0)} onClose={() => setCelebrate(null)} />
+        : <PosikCelebrate n={celebrate} onClose={() => setCelebrate(null)} />)}
+      {showThemeOffer && (
+        <Modal onClose={() => closeThemeOffer()}>
+          <div className="text-center">
+            <div className="flex justify-center mb-3" style={{ borderRadius: 16, padding: "16px 8px", background: "linear-gradient(180deg,#1a0b3a,#4b1468 45%,#b8327a 75%,#ff7a59)" }}>
+              <div style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 8, paddingTop: 16, paddingRight: 8 }}>
+                <BallSvg size={30} /><span className="pos-logo-text" style={{ fontSize: 22 }}>Billiard POS</span><span className="pos-logo-tag">Miami Beach ✦</span>
+              </div>
+            </div>
+            <h2 className="font-display text-lg font-semibold mb-1" style={{ color: CREAM }}>Yangi mavzu: Miami Beach ✨</h2>
+            <p className="text-sm mb-3" style={{ color: "var(--pos-muted)" }}>Ilovani yangi ko'rinishda sinab ko'ring: tropik kech, neon ranglar va 25+ stolda maxsus tabrik. Hech narsa o'zgarmaydi — faqat ko'rinish.</p>
+            <p className="text-xs mb-4 px-3 py-2 rounded-lg text-left" style={{ background: "rgba(201,162,39,0.12)", color: GOLD }}>⚠️ Internet yoki telefoningiz sust bo'lsa, <b>Odatiy</b> mavzuda qoling — yangi mavzu qo'shimcha shrift va effektlar yuklaydi. Istalgan payt Sozlamalar → Mavzu orqali almashtirasiz.</p>
+            <div className="flex gap-2">
+              <button onClick={() => closeThemeOffer()} className="flex-1 py-3 rounded-xl text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>Keyinroq</button>
+              <button onClick={() => { applyTheme("miami"); closeThemeOffer(); }} className="flex-1 py-3 rounded-xl text-sm font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Sinab ko'rish</button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {screen === "auth" && <AuthScreen onRegister={handleRegister} onLogin={handleLogin} />}
       {screen === "banned" && currentUser && <BannedScreen user={currentUser} onLogout={handleLogout} />}
       {screen === "subscribe" && currentUser && <SubscribeScreen user={currentUser} plans={plans} trialDays={trialDays} trialEnabled={trialEnabled} onPromo={activatePromo} onFreeTrial={activateFreeTrial} onLogout={handleLogout} onBack={canAccess(currentUser) ? () => setScreen("halls") : null} />}
 
       {screen === "halls" && currentUser && (
         <HallsScreen
+          theme={theme} onTheme={applyTheme}
           user={currentUser} halls={halls} bar={bar}
           onCreateHall={createHall} onRenameHall={renameHall} onDeleteHall={deleteHall}
           onAddMenuItem={addMenuItem} onDeleteMenuItem={deleteMenuItem} onUpdateCost={updateMenuItemCost}
@@ -2427,7 +2602,7 @@ export default function BilliardPOS() {
 function Field({ label, value, onChange, type = "text" }) {
   return (
     <div className="mb-3">
-      <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>{label}</div>
+      <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>{label}</div>
       <input value={value} type={type} onChange={(e) => onChange(e.target.value)}
         className="w-full px-4 py-3 rounded-xl outline-none text-sm"
         style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
@@ -2446,6 +2621,13 @@ function Modal({ children, onClose, wide }) {
   );
 }
 function Logo() {
+  if (CUR_THEME === "miami") return (
+    <div style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 8, paddingTop: 16, paddingRight: 8 }}>
+      <BallSvg size={28} />
+      <span className="pos-logo-text">Billiard POS</span>
+      <span className="pos-logo-tag">Miami Beach ✦</span>
+    </div>
+  );
   return (
     <div className="flex items-center gap-2">
       <span style={{ fontSize: 22 }}>🎱</span>
@@ -2482,7 +2664,7 @@ function ProModal({ onClose, onUpgrade, posik = true }) {
       <div className="text-center">
         {posik && <img src={POSIK_IMG.point} alt="Posik" className="mx-auto mb-2" style={{ height: 150 }} />}
         <h2 className="font-display text-lg font-bold mb-1" style={{ color: GOLD }}>Bu imkoniyat ⭐ Pro tarifda</h2>
-        <p className="text-xs mb-3" style={{ color: "#b8c9bf" }}>Pro tarifga o'tsangiz, hammasi ochiladi:</p>
+        <p className="text-xs mb-3" style={{ color: "var(--pos-muted)" }}>Pro tarifga o'tsangiz, hammasi ochiladi:</p>
       </div>
       <ul className="mb-4 space-y-1.5">
         {TIER_FEATURES.pro.map((f) => (
@@ -2490,7 +2672,7 @@ function ProModal({ onClose, onUpgrade, posik = true }) {
         ))}
       </ul>
       <button onClick={onUpgrade} style={{ background: GOLD, color: FELT_DARK }} className="w-full py-3 rounded-xl font-semibold text-sm font-display">Pro tarifga o'tish</button>
-      <button onClick={onClose} className="w-full mt-2 py-2 text-xs" style={{ color: "#8fa398" }}>Keyinroq</button>
+      <button onClick={onClose} className="w-full mt-2 py-2 text-xs" style={{ color: "var(--pos-muted2)" }}>Keyinroq</button>
     </Modal>
   );
 }
@@ -2516,7 +2698,7 @@ function TelegramReportLink({ user }) {
         <div className="text-sm font-medium" style={{ color: CREAM }}>
           {user.telegramVerified ? "Telegram ulangan ✅" : "Telegram'da kunlik hisobot"}
         </div>
-        <div className="text-xs" style={{ color: "#8fa398" }}>
+        <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>
           {pro ? "Posik har kuni ertalab 09:00 da kechagi kun hisobotini yuboradi" : "⭐ Pro tarifda ishlaydi"}
         </div>
       </div>
@@ -2676,27 +2858,27 @@ function AuthScreen({ onRegister, onLogin }) {
                 {busy && <Loader2 size={15} className="animate-spin" />} Kirish
               </button>
               <a href={`${BOT_URL}?start=forgot`} target="_blank" rel="noopener noreferrer"
-                className="block text-center text-xs mt-3 underline" style={{ color: "#b8c9bf" }}>Parolni unutdingizmi?</a>
+                className="block text-center text-xs mt-3 underline" style={{ color: "var(--pos-muted)" }}>Parolni unutdingizmi?</a>
             </>
           ) : (
             <>
               <h1 className="font-display text-xl font-semibold mb-1" style={{ color: CREAM }}>Ro'yxatdan o'tish</h1>
-              <p className="text-sm mb-5" style={{ color: "#b8c9bf" }}>Billiardxonangizni boshqarishni boshlang</p>
+              <p className="text-sm mb-5" style={{ color: "var(--pos-muted)" }}>Billiardxonangizni boshqarishni boshlang</p>
               <Field label="Ism" value={name} onChange={setName} />
               <Field label="Telefon (+998991234567)" value={phone} onChange={setPhone} />
               <div className="mb-3">
-                <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Login</div>
+                <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>Login</div>
                 <input value={login} onChange={(e) => setLogin(e.target.value)}
                   className="w-full px-4 py-3 rounded-xl outline-none text-sm"
                   style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${loginTaken ? RED : FELT_LIGHT}` }} />
                 {loginTaken && <div className="text-xs mt-1" style={{ color: "#ff8a8a" }}>Bu login band, boshqasini tanlang</div>}
               </div>
               <div className="mb-3">
-                <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Parol</div>
+                <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>Parol</div>
                 <input value={password} onChange={(e) => setPassword(e.target.value)} type="password"
                   className="w-full px-4 py-3 rounded-xl outline-none text-sm"
                   style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${showPassWarning ? RED : FELT_LIGHT}` }} />
-                <div className="text-xs mt-1" style={{ color: showPassWarning ? "#ff8a8a" : "#8fa398" }}>Parol kamida 8 belgidan iborat bo'lishi kerak</div>
+                <div className="text-xs mt-1" style={{ color: showPassWarning ? "#ff8a8a" : "var(--pos-muted2)" }}>Parol kamida 8 belgidan iborat bo'lishi kerak</div>
               </div>
               <button disabled={busy || loginTaken || checkingLogin || password.length < 8 || !name.trim() || !login.trim()}
                 onClick={doRegister} style={{ background: GOLD, color: FELT_DARK }}
@@ -2718,8 +2900,8 @@ function BannedScreen({ user, onLogout }) {
       <div className="w-full max-w-sm text-center">
         <Ban size={40} style={{ color: RED }} className="mx-auto mb-4" />
         <h1 className="font-display text-xl font-semibold mb-2" style={{ color: CREAM }}>Akkauntingiz vaqtincha bloklangan</h1>
-        <p className="text-sm mb-1" style={{ color: "#b8c9bf" }}>Sabab: {user.banReason || "ko'rsatilmagan"}</p>
-        <p className="text-sm mb-6" style={{ color: "#b8c9bf" }}>Taxminan {daysLeft > 0 ? daysLeft : 1} kundan so'ng qayta urinib ko'ring</p>
+        <p className="text-sm mb-1" style={{ color: "var(--pos-muted)" }}>Sabab: {user.banReason || "ko'rsatilmagan"}</p>
+        <p className="text-sm mb-6" style={{ color: "var(--pos-muted)" }}>Taxminan {daysLeft > 0 ? daysLeft : 1} kundan so'ng qayta urinib ko'ring</p>
         <div className="mb-4"><SupportLink /></div>
         <div className="mb-4"><LangSwitch /></div>
         <button onClick={onLogout} className="text-sm underline" style={{ color: GOLD }}>Chiqish</button>
@@ -2738,20 +2920,20 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
     <div className="min-h-screen flex items-center justify-center px-5 py-10">
       <div className="w-full max-w-sm">
         <div className="flex justify-between items-center mb-6">
-          <p className="text-sm" style={{ color: "#b8c9bf" }}>Xush kelibsiz, <span style={{ color: CREAM }} className="font-medium">{user.name}</span></p>
+          <p className="text-sm" style={{ color: "var(--pos-muted)" }}>Xush kelibsiz, <span style={{ color: CREAM }} className="font-medium">{user.name}</span></p>
           <div className="flex items-center gap-3">
             <LangSwitch />
             <button onClick={onLogout} className="text-xs opacity-60 flex items-center gap-1" style={{ color: CREAM }}><LogOut size={13} /> Chiqish</button>
           </div>
         </div>
         {onBack && (
-          <button onClick={onBack} className="text-xs mb-3 flex items-center gap-1" style={{ color: "#b8c9bf" }}>← Orqaga</button>
+          <button onClick={onBack} className="text-xs mb-3 flex items-center gap-1" style={{ color: "var(--pos-muted)" }}>← Orqaga</button>
         )}
         {active ? (
           <div className="rounded-2xl p-4 mb-4" style={{ background: "rgba(123,191,106,0.10)", border: "1px solid #7bbf6a" }}>
-            <div className="text-xs mb-1" style={{ color: "#8fa398" }}>Joriy obuna</div>
+            <div className="text-xs mb-1" style={{ color: "var(--pos-muted2)" }}>Joriy obuna</div>
             <div className="text-sm font-semibold" style={{ color: CREAM }}>{`${fmtDate(user.subscriptionUntil)} gacha`}<span style={{ color: "#7bbf6a" }}>{` · ${left} kun qoldi`}</span></div>
-            <div className="text-[11px] mt-2" style={{ color: "#8fa398" }}>Yangi obuna qolgan kunlarga qo'shiladi. Masalan: 15 kun qolgan + 30 kun = 45 kun.</div>
+            <div className="text-[11px] mt-2" style={{ color: "var(--pos-muted2)" }}>Yangi obuna qolgan kunlarga qo'shiladi. Masalan: 15 kun qolgan + 30 kun = 45 kun.</div>
           </div>
         ) : (
           <div className="text-xs mb-3 px-3 py-1.5 rounded-full inline-block" style={{ background: "rgba(178,58,58,0.15)", color: "#e88" }}>
@@ -2760,7 +2942,7 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
         )}
 
         {plans.length === 0 && (
-          <p className="text-sm mb-4" style={{ color: "#8fa398" }}>Hozircha tariflar sozlanmagan. Birozdan so'ng qayta urinib ko'ring.</p>
+          <p className="text-sm mb-4" style={{ color: "var(--pos-muted2)" }}>Hozircha tariflar sozlanmagan. Birozdan so'ng qayta urinib ko'ring.</p>
         )}
         {["basic", "pro"].map((tier) => {
           const ps = plans.filter((p) => p.tier === tier);
@@ -2774,17 +2956,17 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
               </div>
               <ul className="mb-3 space-y-1">
                 {TIER_FEATURES[tier].map((f) => (
-                  <li key={f} className="text-xs flex items-center gap-1.5" style={{ color: "#b8c9bf" }}><Check size={12} style={{ color: pro ? GOLD : "#7bbf6a" }} /> {f}</li>
+                  <li key={f} className="text-xs flex items-center gap-1.5" style={{ color: "var(--pos-muted)" }}><Check size={12} style={{ color: pro ? GOLD : "#7bbf6a" }} /> {f}</li>
                 ))}
               </ul>
               {ps.map((p) => (
                 <div key={p.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-2">
                   <div className="flex items-baseline justify-between gap-2 mb-1">
-                    <span className="text-sm" style={{ color: "#b8c9bf" }}>{p.label} obuna</span>
+                    <span className="text-sm" style={{ color: "var(--pos-muted)" }}>{p.label} obuna</span>
                     <span className="font-display text-xl font-bold" style={{ color: GOLD }}>{fmtMoney(p.price)}</span>
                   </div>
                   {p.days > 0 && (
-                    <p className="text-[11px] mb-3" style={{ color: "#8fa398" }}>{`Yangi tugash sanasi: ${fmtDate(computeNewUntil(user.subscriptionUntil, p.days))}`}</p>
+                    <p className="text-[11px] mb-3" style={{ color: "var(--pos-muted2)" }}>{`Yangi tugash sanasi: ${fmtDate(computeNewUntil(user.subscriptionUntil, p.days))}`}</p>
                   )}
                   <a href={`${BOT}?start=${p.id}`} target="_blank" rel="noopener noreferrer"
                     style={{ background: pro ? GOLD : FELT_DARK, color: pro ? FELT_DARK : CREAM, border: pro ? "none" : `1px solid ${FELT_LIGHT}` }} className="w-full py-2.5 rounded-xl font-semibold text-sm font-display block text-center">
@@ -2803,7 +2985,7 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
           </button>
         )}
 
-        <p className="text-xs text-center mb-4" style={{ color: "#8fa398" }}>
+        <p className="text-xs text-center mb-4" style={{ color: "var(--pos-muted2)" }}>
           Tugmani bosgach @Billiard_pos_bot ochiladi — u yerda to'lov cheki yuborasiz, tasdiqlangach obunangiz faollashadi.
         </p>
 
@@ -2823,7 +3005,7 @@ function SubscribeScreen({ user, plans, trialDays, trialEnabled, onPromo, onFree
 }
 
 // ---------------- HALLS + BAR ----------------
-function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onExtend, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword, onTogglePosik }) {
+function HallsScreen({ theme, onTheme, user, halls, bar, promos = [], onPromos, onCreateHall, onRenameHall, onDeleteHall, onAddMenuItem, onDeleteMenuItem, onUpdateCost, onOpenHall, onLogout, onStats, onExtend, onWarehouse, onDebts, onFinance, onStaff, staffList, staffSalaries, salaryPayments, onMarkSalaryPaid, shifts, onOpenShift, onCloseShift, history, warehouseLogs, onSupport, unreadCount, onChangePassword, onTogglePosik }) {
   const [proModal, setProModal] = useState(false);
   const pro = isPro(user);
   const [tab, setTab] = useState("halls");
@@ -2856,7 +3038,7 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
         <Logo />
         <div className="flex items-center gap-4">
           <button onClick={openGuide} title="Qo'llanma" className="relative">
-            <BookOpen size={18} style={{ color: isNewUser ? GOLD : "#b8c9bf" }} />
+            <BookOpen size={18} style={{ color: isNewUser ? GOLD : "var(--pos-muted)" }} />
             {isNewUser && (
               <span className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full animate-ping" style={{ background: GOLD }} />
             )}
@@ -2864,19 +3046,19 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
               <span className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full" style={{ background: GOLD }} />
             )}
           </button>
-          <button onClick={() => setShowPass(true)} title="Sozlamalar"><Settings size={18} style={{ color: "#b8c9bf" }} /></button>
+          <button onClick={() => setShowPass(true)} title="Sozlamalar"><Settings size={18} style={{ color: "var(--pos-muted)" }} /></button>
           <button onClick={onSupport} title="Yordam" className="relative">
-            <MessageCircle size={18} style={{ color: "#b8c9bf" }} />
+            <MessageCircle size={18} style={{ color: "var(--pos-muted)" }} />
             {unreadCount > 0 && (
               <span className="absolute -top-2 -right-2 min-w-[16px] h-4 px-1 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: RED, color: "#fff" }}>
                 {unreadCount}
               </span>
             )}
           </button>
-          <button onClick={onStats} title="Statistika"><BarChart3 size={18} style={{ color: "#b8c9bf" }} /></button>
+          <button onClick={onStats} title="Statistika"><BarChart3 size={18} style={{ color: "var(--pos-muted)" }} /></button>
         </div>
       </div>
-      <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Salom, {user.name}</p>
+      <p className="text-sm mb-4" style={{ color: "var(--pos-muted)" }}>Salom, {user.name}</p>
 
       {user.role === "owner" && user.accountType !== "vip" && user.subscriptionUntil && (() => {
         const dl = subDaysLeft(user.subscriptionUntil);
@@ -2886,7 +3068,7 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
             {warn && <Bell size={14} style={{ color: GOLD }} />}
             <div className="flex-1 min-w-0">
               <div className="text-xs" style={{ color: CREAM }}>{`${warn ? "Obuna tez orada tugaydi" : "Obuna faol"}: ${dl} kun qoldi`}</div>
-              <div className="text-[11px]" style={{ color: "#8fa398" }}>{`${fmtDate(user.subscriptionUntil)} gacha`}</div>
+              <div className="text-[11px]" style={{ color: "var(--pos-muted2)" }}>{`${fmtDate(user.subscriptionUntil)} gacha`}</div>
             </div>
             {onExtend && (
               <button onClick={onExtend} className="text-xs px-3 py-1.5 rounded-lg font-semibold whitespace-nowrap" style={{ background: GOLD, color: FELT_DARK }}>Uzaytirish</button>
@@ -2903,13 +3085,13 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
               <>
                 <div>
                   <div className="text-xs font-semibold flex items-center gap-1" style={{ color: "#7bbf6a" }}>🟢 Smena ochiq</div>
-                  <div className="text-[11px] mt-0.5" style={{ color: "#b8c9bf" }}>{openShiftObj.openedByName} · {fmtDate(openShiftObj.openedAt)} dan beri</div>
+                  <div className="text-[11px] mt-0.5" style={{ color: "var(--pos-muted)" }}>{openShiftObj.openedByName} · {fmtDate(openShiftObj.openedAt)} dan beri</div>
                 </div>
                 <button onClick={() => setShowShiftSummary(true)} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: RED, color: "#fff" }}>Yopish</button>
               </>
             ) : (
               <>
-                <div className="text-xs" style={{ color: "#b8c9bf" }}>Smena ochilmagan</div>
+                <div className="text-xs" style={{ color: "var(--pos-muted)" }}>Smena ochilmagan</div>
                 <button onClick={onOpenShift} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: GOLD, color: FELT_DARK }}>Smena ochish</button>
               </>
             )}
@@ -3006,7 +3188,7 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
             <FileText size={18} style={{ color: GOLD }} />
             <div>
               <div className="text-sm font-medium" style={{ color: CREAM }}>Foydalanish qo'llanmasi</div>
-              <div className="text-xs" style={{ color: "#8fa398" }}>Ilovadan qanday foydalanish, qadam-baqadam</div>
+              <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>Ilovadan qanday foydalanish, qadam-baqadam</div>
             </div>
           </a>
           <a href="/docs/ornatish.pdf" target="_blank" rel="noopener noreferrer"
@@ -3015,7 +3197,7 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
             <Download size={18} style={{ color: GOLD }} />
             <div>
               <div className="text-sm font-medium" style={{ color: CREAM }}>Ilovani o'rnatish qo'llanmasi</div>
-              <div className="text-xs" style={{ color: "#8fa398" }}>Android, iPhone va kompyuterga o'rnatish</div>
+              <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>Android, iPhone va kompyuterga o'rnatish</div>
             </div>
           </a>
         </Modal>
@@ -3039,7 +3221,7 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
               <img src={POSIK_IMG.avatar} alt="" className="w-8 h-8 rounded-full" style={{ opacity: user.posikEnabled !== false ? 1 : 0.4 }} />
               <div className="flex-1">
                 <div className="text-sm font-medium" style={{ color: CREAM }}>Posik yordamchi</div>
-                <div className="text-xs" style={{ color: "#8fa398" }}>Maslahatlar va tabriklar</div>
+                <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>Maslahatlar va tabriklar</div>
               </div>
               <span className="relative inline-block w-11 h-6 rounded-full transition-colors" style={{ background: user.posikEnabled !== false ? "#7bbf6a" : "#4a5a52" }}>
                 <span className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all" style={{ left: user.posikEnabled !== false ? 22 : 2 }} />
@@ -3049,10 +3231,22 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
           {user.role === "owner" && <div className="mt-3"><TelegramReportLink user={user} /></div>}
           <div className="mt-3"><SupportLink /></div>
           <div className="flex items-center justify-between mt-4">
-            <span className="text-xs" style={{ color: "#8fa398" }}>Til</span>
+            <span className="text-xs" style={{ color: "var(--pos-muted2)" }}>Til</span>
             <LangSwitch />
           </div>
-          <p className="text-center text-xs mt-4" style={{ color: "#8fa398" }}>Ilova versiyasi: {APP_VERSION}</p>
+          {onTheme && (
+            <div className="mt-4">
+              <div className="text-xs mb-2" style={{ color: "var(--pos-muted2)" }}>Mavzu</div>
+              <div className="grid grid-cols-2 gap-2">
+                {[["classic", "Odatiy"], ["miami", "Miami Beach ✦"]].map(([k, l]) => (
+                  <button key={k} onClick={() => onTheme(k)} className="py-2.5 rounded-xl text-xs font-semibold"
+                    style={{ background: theme === k ? GOLD : FELT_DARK, color: theme === k ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>{l}</button>
+                ))}
+              </div>
+              <p className="text-[11px] mt-2" style={{ color: "var(--pos-muted2)" }}>⚠️ Internet yoki telefon sust bo'lsa, Odatiy mavzudan foydalaning — Miami Beach qo'shimcha shrift va effektlar yuklaydi.</p>
+            </div>
+          )}
+          <p className="text-center text-xs mt-4" style={{ color: "var(--pos-muted2)" }}>Ilova versiyasi: {APP_VERSION}</p>
         </Modal>
       )}
 
@@ -3074,8 +3268,8 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
             return (
               <div key={h.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-2xl p-5 text-left relative">
                 <button onClick={() => onOpenHall(h.id)} className="block w-full text-left mb-1">
-                  <div className="font-display font-semibold" style={{ color: CREAM }}>🎱 {h.name}</div>
-                  <div className="text-xs mt-1" style={{ color: "#b8c9bf" }}>{h.tables.length} stol · {playing} band</div>
+                  <div className="font-display font-semibold flex items-center gap-1.5" style={{ color: CREAM }}><Ball size={20} /> {h.name}</div>
+                  <div className="text-xs mt-1" style={{ color: "var(--pos-muted)" }}>{h.tables.length} stol · {playing} band</div>
                 </button>
                 {user.role === "owner" && (
                   <div className="flex gap-2 mt-3">
@@ -3088,7 +3282,7 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
           })}
           {user.role === "owner" && (
             <button onClick={() => setShowModal(true)} style={{ border: `1px dashed ${FELT_LIGHT}` }} className="rounded-2xl p-5 flex flex-col items-center justify-center gap-2 min-h-[110px]">
-              <Plus size={20} style={{ color: GOLD }} /><span className="text-xs" style={{ color: "#b8c9bf" }}>Yangi zal</span>
+              <Plus size={20} style={{ color: GOLD }} /><span className="text-xs" style={{ color: "var(--pos-muted)" }}>Yangi zal</span>
             </button>
           )}
         </div>
@@ -3098,7 +3292,7 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
         <div>
           {user.role === "owner" ? (
             <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
-              <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi mahsulot qo'shish</div>
+              <div className="text-xs mb-3" style={{ color: "var(--pos-muted2)" }}>Yangi mahsulot qo'shish</div>
               <div className="flex gap-2 mb-2">
                 <input value={menuName} onChange={(e) => setMenuName(e.target.value)} placeholder="Nomi, masalan Kola"
                   className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
@@ -3116,7 +3310,7 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
               </button>
             </div>
           ) : (
-            <p className="text-xs mb-4" style={{ color: "#8fa398" }}>Narx va tannarxni faqat boshliq o'zgartira oladi.</p>
+            <p className="text-xs mb-4" style={{ color: "var(--pos-muted2)" }}>Narx va tannarxni faqat boshliq o'zgartira oladi.</p>
           )}
           <div className="grid grid-cols-2 gap-2">
             {bar.length === 0 && <p className="text-sm opacity-50 col-span-2" style={{ color: CREAM }}>Hali mahsulot yo'q</p>}
@@ -3129,10 +3323,10 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
                     <div className="text-xs font-mono" style={{ color: item.color }}>{fmtMoney(item.price)}</div>
                     {user.role === "owner" && (
                       <div className="flex items-center gap-1 mt-1">
-                        <span className="text-[10px]" style={{ color: "#8fa398" }}>Tannarx:</span>
+                        <span className="text-[10px]" style={{ color: "var(--pos-muted2)" }}>Tannarx:</span>
                         <input defaultValue={item.costPrice || ""} placeholder="0"
                           onBlur={(e) => { if (Number(e.target.value) !== item.costPrice) onUpdateCost(item.id, e.target.value); }}
-                          className="w-16 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "#8fa398", border: `1px solid ${FELT_LIGHT}` }} />
+                          className="w-16 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "var(--pos-muted2)", border: `1px solid ${FELT_LIGHT}` }} />
                         <span className="text-[10px]" style={{ color: item.price - item.costPrice >= 0 ? "#7bbf6a" : "#ff8a8a" }}>
                           (+{fmtMoney(item.price - item.costPrice)})
                         </span>
@@ -3182,8 +3376,8 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
           periodDirect.forEach((l) => { const m = l.paymentMethod || "naqd"; const amt = (l.sellPrice || 0) * -l.changeUnits; byMethod[m] = (byMethod[m] || 0) + amt; total += amt; });
           body = (
             <div className="space-y-2 mb-4">
-              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
-              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "var(--pos-muted)" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "var(--pos-muted)" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
               <div className="flex justify-between text-sm font-semibold pt-2 border-t" style={{ borderColor: FELT_LIGHT, color: GOLD }}><span>Jami</span><span className="font-mono">{fmtMoney(total)}</span></div>
             </div>
           );
@@ -3191,9 +3385,9 @@ function HallsScreen({ user, halls, bar, promos = [], onPromos, onCreateHall, on
           const totalDuration = periodHistory.reduce((s, h) => s + h.duration, 0);
           body = (
             <div className="space-y-2 mb-4">
-              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Yopilgan stollar</span><span className="font-mono" style={{ color: CREAM }}>{periodHistory.length} ta</span></div>
-              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Jami o'ynalgan vaqt</span><span className="font-mono" style={{ color: CREAM }}>{fmtDuration(totalDuration)}</span></div>
-              <div className="flex justify-between text-sm"><span style={{ color: "#b8c9bf" }}>Sklad savdolari</span><span className="font-mono" style={{ color: CREAM }}>{periodDirect.length} ta</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "var(--pos-muted)" }}>Yopilgan stollar</span><span className="font-mono" style={{ color: CREAM }}>{periodHistory.length} ta</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "var(--pos-muted)" }}>Jami o'ynalgan vaqt</span><span className="font-mono" style={{ color: CREAM }}>{fmtDuration(totalDuration)}</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "var(--pos-muted)" }}>Sklad savdolari</span><span className="font-mono" style={{ color: CREAM }}>{periodDirect.length} ta</span></div>
             </div>
           );
         }
@@ -3311,7 +3505,7 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
           </button>
 
           {warehouseItems.length === 0 ? (
-            <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha sklad bo'sh</p>
+            <p className="text-sm text-center py-10" style={{ color: "var(--pos-muted)" }}>Hozircha sklad bo'sh</p>
           ) : (
             <div className="space-y-2">
               {warehouseItems.map((w) => {
@@ -3320,11 +3514,11 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
                 <div key={w.id} style={{ background: FELT, border: `1px solid ${low ? "#b23a3a" : FELT_LIGHT}`, borderRadius: 16 }} className="p-3.5 flex items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{w.name}</div>
-                    <div className="text-xs" style={{ color: low ? "#ff8a8a" : "#b8c9bf" }}>{w.units} dona qoldi</div>
+                    <div className="text-xs" style={{ color: low ? "#ff8a8a" : "var(--pos-muted)" }}>{w.units} dona qoldi</div>
                     <div className="flex items-center gap-1 mt-1">
-                      <span className="text-[10px]" style={{ color: "#8fa398" }}>Kam qolish chegarasi:</span>
+                      <span className="text-[10px]" style={{ color: "var(--pos-muted2)" }}>Kam qolish chegarasi:</span>
                       <input defaultValue={w.lowStockThreshold} onBlur={(e) => { if (Number(e.target.value) !== w.lowStockThreshold) onSetThreshold(w.id, e.target.value); }}
-                        className="w-12 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "#8fa398", border: `1px solid ${FELT_LIGHT}` }} />
+                        className="w-12 px-1.5 py-0.5 rounded text-[10px] font-mono outline-none" style={{ background: FELT_DARK, color: "var(--pos-muted2)", border: `1px solid ${FELT_LIGHT}` }} />
                     </div>
                   </div>
                   <div className="flex gap-1.5 shrink-0">
@@ -3354,7 +3548,7 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
           </div>
 
           <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 mb-4">
-            <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: "#8fa398" }}><CalendarRange size={13} /> Yoki aniq sana tanlang</div>
+            <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: "var(--pos-muted2)" }}><CalendarRange size={13} /> Yoki aniq sana tanlang</div>
             <div className="flex gap-2">
               <input type="date" value={repFrom} onChange={(e) => setRepFrom(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
               <input type="date" value={repTo} onChange={(e) => setRepTo(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
@@ -3367,13 +3561,13 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
             <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(reportOverall.totalMoney)}</span>
           </div>
 
-          {reportShiftGroups.length === 0 && <p className="text-sm text-center py-6" style={{ color: "#b8c9bf" }}>Shu davrda sotuv bo'lmagan</p>}
+          {reportShiftGroups.length === 0 && <p className="text-sm text-center py-6" style={{ color: "var(--pos-muted)" }}>Shu davrda sotuv bo'lmagan</p>}
           <div className="space-y-4 mb-4">
             {reportShiftGroups.map((g) => (
               <div key={g.key}>
                 <div className="flex justify-between items-center mb-1.5 px-1">
                   <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 {g.label}</span>
-                  <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.totalMoney)}</span>
+                  <span className="text-[11px] font-mono" style={{ color: "var(--pos-muted2)" }}>{fmtMoney(g.totalMoney)}</span>
                 </div>
                 <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14, overflow: "hidden" }}>
                   {g.raw.map((l, idx) => {
@@ -3384,7 +3578,7 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
                       <div key={l.id} className="flex justify-between items-center px-3.5 py-2.5" style={{ borderTop: idx > 0 ? `1px solid ${FELT_LIGHT}` : "none" }}>
                         <div>
                           <div className="text-sm" style={{ color: CREAM }}>{wi ? wi.name : "?"} × {qty}</div>
-                          <div className="text-[11px]" style={{ color: "#8fa398" }}>
+                          <div className="text-[11px]" style={{ color: "var(--pos-muted2)" }}>
                             {fmtTime(l.createdAt)} · {l.type === "direct" ? "to'g'ridan-to'g'ri sotildi" : (l.note || "stolga sotildi")}{l.actorName ? ` · ${l.actorName}` : ""}
                           </div>
                         </div>
@@ -3399,7 +3593,7 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
 
           {periodChanges.length > 0 && (
             <details className="mt-2">
-              <summary className="text-xs cursor-pointer mb-2" style={{ color: "#8fa398" }}>Kirim/chiqim tarixi (qo'shilgan/ayirilgan) — {periodChanges.length} ta</summary>
+              <summary className="text-xs cursor-pointer mb-2" style={{ color: "var(--pos-muted2)" }}>Kirim/chiqim tarixi (qo'shilgan/ayirilgan) — {periodChanges.length} ta</summary>
               <div className="space-y-1.5 mt-2">
                 {periodChanges.map((l) => {
                   const wi = warehouseItems.find((w) => w.id === l.warehouseItemId);
@@ -3407,7 +3601,7 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
                     <div key={l.id} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 12 }} className="p-2.5 flex items-center justify-between">
                       <div>
                         <div className="text-xs font-medium" style={{ color: CREAM }}>{wi ? wi.name : "?"}</div>
-                        <div className="text-[10px]" style={{ color: "#8fa398" }}>
+                        <div className="text-[10px]" style={{ color: "var(--pos-muted2)" }}>
                           {l.entryDate} {fmtTime(l.createdAt)} · {l.type === "add" ? "qo'shildi" : "ayrildi"}{l.note ? ` · ${l.note}` : ""}{l.actorName ? ` · ${l.actorName}` : ""}
                         </div>
                       </div>
@@ -3427,7 +3621,7 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
         <Modal onClose={() => setShowAdd(false)}>
           <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>Tovar qo'shish</h2>
           <div className="mb-3">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Mahsulot</label>
+            <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>Mahsulot</label>
             <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
               {bar.map((b) => (
                 <button key={b.id} onClick={() => setPickedBarItem(b)} className="py-2 rounded-lg text-xs font-medium"
@@ -3439,16 +3633,16 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
           </div>
           <div className="grid grid-cols-2 gap-2 mb-3">
             <div>
-              <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha blok</label>
+              <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>Necha blok</label>
               <input type="number" value={blocks} onChange={(e) => setBlocks(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
             </div>
             <div>
-              <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>1 blokda nechta</label>
+              <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>1 blokda nechta</label>
               <input type="number" value={unitsPerBlock} onChange={(e) => setUnitsPerBlock(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
             </div>
           </div>
           <div className="mb-3">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Sana</label>
+            <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>Sana</label>
             <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
           {blocks && unitsPerBlock && (
@@ -3471,14 +3665,14 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
       {removeItem && (
         <Modal onClose={() => setRemoveItem(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{removeItem.name}"dan ayirish</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Hozir: {removeItem.units} dona</p>
+          <p className="text-sm mb-4" style={{ color: "var(--pos-muted)" }}>Hozir: {removeItem.units} dona</p>
           <div className="grid grid-cols-2 gap-2 mb-3">
             <div>
-              <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha blok</label>
+              <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>Necha blok</label>
               <input type="number" value={rmBlocks} onChange={(e) => setRmBlocks(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
             </div>
             <div>
-              <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>1 blokda nechta</label>
+              <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>1 blokda nechta</label>
               <input type="number" value={rmUnitsPerBlock} onChange={(e) => setRmUnitsPerBlock(e.target.value)} placeholder="1" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
             </div>
           </div>
@@ -3499,13 +3693,13 @@ function WarehouseScreen({ user, bar, warehouseItems, warehouseLogs, shifts, onB
       {sellItem && (
         <Modal onClose={() => setSellItem(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{sellItem.name}" sotish</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Stoldan tashqari — mijoz shunchaki sotib olganda. Hozir: {sellItem.units} dona</p>
+          <p className="text-sm mb-4" style={{ color: "var(--pos-muted)" }}>Stoldan tashqari — mijoz shunchaki sotib olganda. Hozir: {sellItem.units} dona</p>
           <div className="mb-3">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Necha dona</label>
+            <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>Necha dona</label>
             <input type="number" value={sellQty} onChange={(e) => setSellQty(e.target.value)} placeholder="0" className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
           <div className="mb-3">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>To'lov turi</label>
+            <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>To'lov turi</label>
             <div className="grid grid-cols-2 gap-1.5">
               {[["naqd", "Naqd"], ["karta", "Karta"]].map(([val, label]) => (
                 <button key={val} onClick={() => setSellMethod(val)}
@@ -3582,7 +3776,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
             <Plus size={16} /> Qarzdor qo'shish
           </button>
           {open.length === 0 ? (
-            <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Qarzdor yo'q</p>
+            <p className="text-sm text-center py-10" style={{ color: "var(--pos-muted)" }}>Qarzdor yo'q</p>
           ) : (
             <div className="space-y-2">
               {open.map((d) => {
@@ -3600,15 +3794,15 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
                       <div className="text-sm font-medium" style={{ color: CREAM }}>{d.name}</div>
                       <div className="text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(remaining)}</div>
                     </div>
-                    {d.phone && <div className="text-xs mb-0.5" style={{ color: "#b8c9bf" }}>📞 {d.phone}</div>}
-                    <div className="text-xs mb-1" style={{ color: "#b8c9bf" }}>
+                    {d.phone && <div className="text-xs mb-0.5" style={{ color: "var(--pos-muted)" }}>📞 {d.phone}</div>}
+                    <div className="text-xs mb-1" style={{ color: "var(--pos-muted)" }}>
                       {d.debtDate} dan{d.dueDate ? ` · qaytarish: ${d.dueDate}` : ""} · jami: {fmtMoney(d.amount)}{d.paidAmount > 0 ? ` · ${fmtMoney(d.paidAmount)} to'langan` : ""}{d.actorName ? ` · yozgan: ${d.actorName}` : ""}
                     </div>
-                    {d.note && <div className="text-xs mb-2" style={{ color: "#b8c9bf" }}>💬 {d.note}</div>}
+                    {d.note && <div className="text-xs mb-2" style={{ color: "var(--pos-muted)" }}>💬 {d.note}</div>}
                     {timeline.length > 0 && (
                       <div className="mb-2 pl-2 border-l-2 space-y-0.5" style={{ borderColor: FELT_LIGHT }}>
                         {timeline.map((item) => (
-                          <div key={item.id} className="text-[11px]" style={{ color: "#8fa398" }}>
+                          <div key={item.id} className="text-[11px]" style={{ color: "var(--pos-muted2)" }}>
                             {fmtDate(item.at)}, {new Date(item.at).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" })} — {item.text}
                           </div>
                         ))}
@@ -3635,7 +3829,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
       {tab === "closed" && (
         <div className="space-y-2">
           {closed.length === 0 ? (
-            <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha yo'q</p>
+            <p className="text-sm text-center py-10" style={{ color: "var(--pos-muted)" }}>Hozircha yo'q</p>
           ) : closed.map((d) => {
             const payments = (debtPayments || []).filter((p) => p.debtId === d.id);
             return (
@@ -3644,11 +3838,11 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{d.name}</div>
                   <div className="text-xs" style={{ color: "#7fd99a" }}>✅ {fmtMoney(d.amount)} yopilgan</div>
                 </div>
-                {d.closedAt && <div className="text-[11px] mt-0.5" style={{ color: "#8fa398" }}>Yopilgan sana: {fmtDate(d.closedAt)}</div>}
+                {d.closedAt && <div className="text-[11px] mt-0.5" style={{ color: "var(--pos-muted2)" }}>Yopilgan sana: {fmtDate(d.closedAt)}</div>}
                 {payments.length > 0 && (
                   <div className="mt-1.5 pl-2 border-l-2 space-y-0.5" style={{ borderColor: FELT_LIGHT }}>
                     {payments.map((p) => (
-                      <div key={p.id} className="text-[11px]" style={{ color: "#8fa398" }}>
+                      <div key={p.id} className="text-[11px]" style={{ color: "var(--pos-muted2)" }}>
                         {fmtDate(p.paidAt)}, {new Date(p.paidAt).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" })} — {fmtMoney(p.amount)} to'landi
                       </div>
                     ))}
@@ -3667,11 +3861,11 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
           <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefon raqami" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Qarz summasi" className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <div className="mb-3">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Qarz sanasi</label>
+            <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>Qarz sanasi</label>
             <input type="date" value={debtDate} onChange={(e) => setDebtDate(e.target.value)} className="w-full px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
           <div className="mb-3">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>Qaytaradigan sana <span style={{ opacity: 0.5 }}>(ixtiyoriy)</span></label>
+            <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>Qaytaradigan sana <span style={{ opacity: 0.5 }}>(ixtiyoriy)</span></label>
             <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-full px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy)"
@@ -3687,7 +3881,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
       {topupTarget && (
         <Modal onClose={() => setTopupTarget(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{topupTarget.name}"ga qarz qo'shish</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Yangi qarzdor yaratmasdan, hozirgi qarziga ustiga qo'shiladi. Hozirgi qoldiq: {fmtMoney(topupTarget.amount - topupTarget.paidAmount)}</p>
+          <p className="text-sm mb-4" style={{ color: "var(--pos-muted)" }}>Yangi qarzdor yaratmasdan, hozirgi qarziga ustiga qo'shiladi. Hozirgi qoldiq: {fmtMoney(topupTarget.amount - topupTarget.paidAmount)}</p>
           <input type="number" value={topupAmount} onChange={(e) => setTopupAmount(e.target.value)} placeholder="Qancha qarz bo'ldi"
             className="w-full mb-3 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <textarea value={topupNote} onChange={(e) => setTopupNote(e.target.value)} rows={2} placeholder="Izoh (ixtiyoriy)"
@@ -3703,7 +3897,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
       {payTarget && (
         <Modal onClose={() => setPayTarget(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{payTarget.name}" qarzini qoplash</h2>
-          <p className="text-sm mb-3" style={{ color: "#b8c9bf" }}>Qoldiq qarz: {fmtMoney(payTarget.amount - payTarget.paidAmount)}</p>
+          <p className="text-sm mb-3" style={{ color: "var(--pos-muted)" }}>Qoldiq qarz: {fmtMoney(payTarget.amount - payTarget.paidAmount)}</p>
           <div className="grid grid-cols-2 gap-1.5 mb-3">
             {[["naqd", "Naqd"], ["karta", "Karta"]].map(([val, label]) => (
               <button key={val} onClick={() => setPayMethod(val)}
@@ -3718,7 +3912,7 @@ function DebtsScreen({ debts, debtPayments, debtTopups, onBack, onAddDebt, onPay
           </button>
           <div className="flex items-center gap-2 mb-2">
             <div className="flex-1 h-px" style={{ background: FELT_LIGHT }} />
-            <span className="text-xs" style={{ color: "#b8c9bf" }}>yoki</span>
+            <span className="text-xs" style={{ color: "var(--pos-muted)" }}>yoki</span>
             <div className="flex-1 h-px" style={{ background: FELT_LIGHT }} />
           </div>
           <input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder="Qancha to'ladi (summasini kiriting)"
@@ -3790,7 +3984,7 @@ function FinanceScreen({ history, warehouseLogs, historySince, onNeedOlder, onBa
       </div>
 
       <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 mb-5">
-        <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: "#8fa398" }}><CalendarRange size={13} /> Yoki aniq sana tanlang</div>
+        <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: "var(--pos-muted2)" }}><CalendarRange size={13} /> Yoki aniq sana tanlang</div>
         <div className="flex gap-2">
           <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="flex-1 px-3 py-2 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
@@ -3799,20 +3993,20 @@ function FinanceScreen({ history, warehouseLogs, historySince, onNeedOlder, onBa
       </div>
 
       <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 mb-3">
-        <div className="text-xs mb-2" style={{ color: "#8fa398" }}>To'lov turi bo'yicha</div>
+        <div className="text-xs mb-2" style={{ color: "var(--pos-muted2)" }}>To'lov turi bo'yicha</div>
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
-          <div className="flex justify-between"><span style={{ color: "#b8c9bf" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
+          <div className="flex justify-between"><span style={{ color: "var(--pos-muted)" }}>Naqd</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.naqd)}</span></div>
+          <div className="flex justify-between"><span style={{ color: "var(--pos-muted)" }}>Karta</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(byMethod.karta)}</span></div>
         </div>
       </div>
 
       <div className="space-y-2">
         <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
-          <span className="text-sm" style={{ color: "#b8c9bf" }}>Bar tushumi</span>
+          <span className="text-sm" style={{ color: "var(--pos-muted)" }}>Bar tushumi</span>
           <span className="font-mono text-base font-semibold" style={{ color: CREAM }}>{fmtMoney(gross)}</span>
         </div>
         <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
-          <span className="text-sm" style={{ color: "#b8c9bf" }}>Mahsulot tannarxi</span>
+          <span className="text-sm" style={{ color: "var(--pos-muted)" }}>Mahsulot tannarxi</span>
           <span className="font-mono text-base font-semibold" style={{ color: "#ff8a8a" }}>−{fmtMoney(costOfGoods)}</span>
         </div>
         <div style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}`, borderRadius: 16 }} className="p-4 flex justify-between items-center">
@@ -3852,7 +4046,7 @@ function StaffScreen({ staffList, staffSalaries, salaryPayments, history, onBack
       </button>
 
       {staffList.length === 0 ? (
-        <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hozircha xodim yo'q</p>
+        <p className="text-sm text-center py-10" style={{ color: "var(--pos-muted)" }}>Hozircha xodim yo'q</p>
       ) : (
         <div className="space-y-3">
           {staffList.map((s) => {
@@ -3866,12 +4060,12 @@ function StaffScreen({ staffList, staffSalaries, salaryPayments, history, onBack
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{s.name}</div>
                   <button onClick={() => { if (confirm(`"${s.name}" akauntini o'chirasizmi?`)) onDeleteStaff(s.id); }}><Trash2 size={14} style={{ color: RED }} /></button>
                 </div>
-                <div className="text-xs mb-2" style={{ color: "#b8c9bf" }}>Login: {s.login}</div>
+                <div className="text-xs mb-2" style={{ color: "var(--pos-muted)" }}>Login: {s.login}</div>
                 {(() => {
                   const mine = (history || []).filter((h) => h.actorName === s.name && daysAgo(h.endTime, 30));
                   const hours = mine.reduce((sum, h) => sum + h.duration, 0) / 3600;
                   return (
-                    <div className="text-[11px] mb-2" style={{ color: "#8fa398" }}>
+                    <div className="text-[11px] mb-2" style={{ color: "var(--pos-muted2)" }}>
                       So'nggi 30 kun: {mine.length} ta stol yopdi · {hours.toFixed(1)} soat ishladi
                     </div>
                   );
@@ -3881,7 +4075,7 @@ function StaffScreen({ staffList, staffSalaries, salaryPayments, history, onBack
                   <div className="flex items-center justify-between mb-2 px-3 py-2 rounded-lg" style={{ background: FELT_DARK }}>
                     <span className="text-xs" style={{ color: CREAM }}>Oylik: {fmtMoney(salary.amount)} · har oyning {salary.payDay}-kunida</span>
                     <button onClick={() => { setSalaryEdit(s.id); setSalaryAmount(String(salary.amount)); setSalaryDay(String(salary.payDay)); }}>
-                      <Pencil size={12} style={{ color: "#b8c9bf" }} />
+                      <Pencil size={12} style={{ color: "var(--pos-muted)" }} />
                     </button>
                   </div>
                 )}
@@ -3917,7 +4111,7 @@ function StaffScreen({ staffList, staffSalaries, salaryPayments, history, onBack
                 {payments.length > 0 && (
                   <div className="mt-2 pl-2 border-l-2 space-y-0.5" style={{ borderColor: FELT_LIGHT }}>
                     {payments.slice(0, 6).map((p) => (
-                      <div key={p.id} className="text-[11px]" style={{ color: "#8fa398" }}>{p.period} — {fmtMoney(p.amount)} berildi ({fmtDate(p.paidAt)})</div>
+                      <div key={p.id} className="text-[11px]" style={{ color: "var(--pos-muted2)" }}>{p.period} — {fmtMoney(p.amount)} berildi ({fmtDate(p.paidAt)})</div>
                     ))}
                   </div>
                 )}
@@ -3982,9 +4176,9 @@ function PromosScreen({ halls, promos, onBack, onSave, onEnd, onDelete }) {
   const statusChip = (st) => st === "now" ? { t: "Hozir faol", bg: "#ff7ab6", fg: "#3a0820" } : st === "upcoming" ? { t: "Kutilmoqda", bg: GOLD, fg: FELT_DARK } : { t: "Tugagan", bg: FELT_LIGHT, fg: CREAM };
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
-      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Zallar</button>
+      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "var(--pos-muted)" }}><ArrowLeft size={16} /> Zallar</button>
       <h1 className="font-display text-2xl font-semibold mb-1 flex items-center gap-2" style={{ color: CREAM }}><Percent size={22} style={{ color: "#ff7ab6" }} /> Aksiyalar</h1>
-      <p className="text-xs mb-4" style={{ color: "#8fa398" }}>Belgilangan soatlarda stol arzonroq narxda hisoblanadi. Vaqt — O'zbekiston vaqti bilan. Agar o'yin aksiya tugagandan keyin ham davom etsa, aksiya vaqtigacha arzon narxda, undan keyin oddiy narxda hisoblanadi.</p>
+      <p className="text-xs mb-4" style={{ color: "var(--pos-muted2)" }}>Belgilangan soatlarda stol arzonroq narxda hisoblanadi. Vaqt — O'zbekiston vaqti bilan. Agar o'yin aksiya tugagandan keyin ham davom etsa, aksiya vaqtigacha arzon narxda, undan keyin oddiy narxda hisoblanadi.</p>
       <button onClick={openNew} style={{ background: "#ff7ab6", color: "#3a0820" }} className="w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 mb-4"><Plus size={16} /> Yangi aksiya</button>
       {promos.length === 0 && <p className="text-sm text-center opacity-70 py-6" style={{ color: CREAM }}>Hozircha aksiya yo'q</p>}
       <div className="space-y-3">
@@ -3997,10 +4191,10 @@ function PromosScreen({ halls, promos, onBack, onSave, onEnd, onDelete }) {
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: c.bg, color: c.fg }}>{c.t}</span>
               </div>
               <div className="text-lg font-bold mb-1" style={{ color: "#ffd1e6" }}>{fmtMoney(p.price)}/soat</div>
-              <div className="text-xs mb-0.5" style={{ color: "#b8c9bf" }}>🕒 Har kuni {p.startTime} — {p.endTime}</div>
-              <div className="text-xs mb-0.5" style={{ color: "#b8c9bf" }}>📅 {fmtUzDate(p.startDate)} — {fmtUzDate(p.endDate)}</div>
-              <div className="text-xs mb-3" style={{ color: "#b8c9bf" }}>🎱 {promoScopeText(p, halls)}</div>
-              {p.endedAt && <div className="text-[11px] mb-2" style={{ color: "#8fa398" }}>To'xtatilgan: {fmtDate(p.endedAt)} {fmtTime(p.endedAt)}</div>}
+              <div className="text-xs mb-0.5" style={{ color: "var(--pos-muted)" }}>🕒 Har kuni {p.startTime} — {p.endTime}</div>
+              <div className="text-xs mb-0.5" style={{ color: "var(--pos-muted)" }}>📅 {fmtUzDate(p.startDate)} — {fmtUzDate(p.endDate)}</div>
+              <div className="text-xs mb-3" style={{ color: "var(--pos-muted)" }}>🎱 {promoScopeText(p, halls)}</div>
+              {p.endedAt && <div className="text-[11px] mb-2" style={{ color: "var(--pos-muted2)" }}>To'xtatilgan: {fmtDate(p.endedAt)} {fmtTime(p.endedAt)}</div>}
               <div className="flex gap-2">
                 <button onClick={() => openEdit(p)} className="flex-1 py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1" style={{ background: FELT_DARK, color: CREAM }}><Pencil size={12} /> Tahrirlash</button>
                 {st !== "ended" && (
@@ -4016,18 +4210,18 @@ function PromosScreen({ halls, promos, onBack, onSave, onEnd, onDelete }) {
       {form && (
         <Modal onClose={() => setForm(null)}>
           <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>{form.id ? "Aksiyani tahrirlash" : "Yangi aksiya"}</h2>
-          <label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Nomi</label>
+          <label className="text-xs mb-1 block" style={{ color: "var(--pos-muted2)" }}>Nomi</label>
           <input value={form.name} onChange={(e) => set("name", e.target.value)} className="w-full mb-3 px-4 py-2.5 rounded-xl outline-none text-sm" style={inp} />
-          <label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Aksiya narxi (so'm / soat)</label>
+          <label className="text-xs mb-1 block" style={{ color: "var(--pos-muted2)" }}>Aksiya narxi (so'm / soat)</label>
           <input value={form.price} onChange={(e) => set("price", e.target.value.replace(/[^0-9]/g, ""))} placeholder="masalan 25000" className="w-full mb-3 px-4 py-2.5 rounded-xl outline-none text-sm font-mono" style={inp} />
           <div className="grid grid-cols-2 gap-2 mb-3">
-            <div><label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Sana: dan</label><input type="date" value={form.startDate} onChange={(e) => set("startDate", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
-            <div><label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Sana: gacha</label><input type="date" value={form.endDate} onChange={(e) => set("endDate", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
-            <div><label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Soat: dan</label><input type="time" value={form.startTime} onChange={(e) => set("startTime", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
-            <div><label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Soat: gacha</label><input type="time" value={form.endTime} onChange={(e) => set("endTime", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
+            <div><label className="text-xs mb-1 block" style={{ color: "var(--pos-muted2)" }}>Sana: dan</label><input type="date" value={form.startDate} onChange={(e) => set("startDate", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
+            <div><label className="text-xs mb-1 block" style={{ color: "var(--pos-muted2)" }}>Sana: gacha</label><input type="date" value={form.endDate} onChange={(e) => set("endDate", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
+            <div><label className="text-xs mb-1 block" style={{ color: "var(--pos-muted2)" }}>Soat: dan</label><input type="time" value={form.startTime} onChange={(e) => set("startTime", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
+            <div><label className="text-xs mb-1 block" style={{ color: "var(--pos-muted2)" }}>Soat: gacha</label><input type="time" value={form.endTime} onChange={(e) => set("endTime", e.target.value)} className="w-full px-3 py-2.5 rounded-xl outline-none text-sm" style={inp} /></div>
           </div>
-          <p className="text-[11px] mb-3" style={{ color: "#8fa398" }}>O'zbekiston vaqti bilan, har kuni shu soatlarda ishlaydi.{hmToMin(form.endTime) < hmToMin(form.startTime) ? " Tunda o'tadigan aksiya: ertasi kuni ertalab tugaydi." : ""}</p>
-          <label className="text-xs mb-1 block" style={{ color: "#8fa398" }}>Qaysi stollarga</label>
+          <p className="text-[11px] mb-3" style={{ color: "var(--pos-muted2)" }}>O'zbekiston vaqti bilan, har kuni shu soatlarda ishlaydi.{hmToMin(form.endTime) < hmToMin(form.startTime) ? " Tunda o'tadigan aksiya: ertasi kuni ertalab tugaydi." : ""}</p>
+          <label className="text-xs mb-1 block" style={{ color: "var(--pos-muted2)" }}>Qaysi stollarga</label>
           <div className="flex gap-2 mb-3">
             {[["all", "Hammasi"], ["hall", "Zal"], ["tables", "Stollar"]].map(([k, l]) => (
               <button key={k} onClick={() => set("scope", k)} className="flex-1 py-2 rounded-xl text-xs font-medium" style={{ background: form.scope === k ? "#ff7ab6" : FELT_DARK, color: form.scope === k ? "#3a0820" : CREAM, border: `1px solid ${FELT_LIGHT}` }}>{l}</button>
@@ -4042,7 +4236,7 @@ function PromosScreen({ halls, promos, onBack, onSave, onEnd, onDelete }) {
             <div className="max-h-48 overflow-y-auto mb-3 space-y-2">
               {halls.map((h) => (
                 <div key={h.id}>
-                  <div className="text-[11px] mb-1" style={{ color: "#8fa398" }}>{h.name}</div>
+                  <div className="text-[11px] mb-1" style={{ color: "var(--pos-muted2)" }}>{h.name}</div>
                   <div className="flex flex-wrap gap-1.5">
                     {h.tables.map((t) => {
                       const on = form.tableIds.includes(t.id);
@@ -4153,8 +4347,8 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
-      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Zallar</button>
-      <h1 className="font-display text-2xl font-semibold mb-6" style={{ color: CREAM }}>🎱 {hall.name}</h1>
+      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "var(--pos-muted)" }}><ArrowLeft size={16} /> Zallar</button>
+      <h1 className="font-display text-2xl font-semibold mb-6 flex items-center gap-2" style={{ color: CREAM }}><Ball size={30} /> <span className="pos-hd">{hall.name}</span></h1>
 
       <div className="grid grid-cols-2 gap-3 mb-4">
         {hall.tables.map((t) => {
@@ -4167,7 +4361,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
             : (playing ? "linear-gradient(160deg,#0e4a36,#0b3d2e)" : paused ? "linear-gradient(160deg,#4a3a0e,#3d2e0b)" : FELT);
           const cardBorder = promoOn ? "#ff7ab6" : (playing ? GOLD : paused ? "#d19a4f" : FELT_LIGHT);
           return (
-            <div key={t.id} style={{ background: cardBg, border: `2px solid ${cardBorder}`, borderRadius: 20, boxShadow: promoOn ? "0 0 18px rgba(255,122,182,0.45)" : "none" }} className="p-4 relative overflow-hidden">
+            <div key={t.id} data-st={playing ? "play" : paused ? "pause" : promoOn ? "promo" : "free"} style={{ background: cardBg, border: `2px solid ${cardBorder}`, borderRadius: 20, boxShadow: promoOn ? "0 0 18px rgba(255,122,182,0.45)" : "none" }} className="pos-table p-4 relative overflow-hidden">
               {promoOn && (
                 <div className="absolute top-0 right-0 px-2 py-0.5 text-[10px] font-bold flex items-center gap-1" style={{ background: "#ff7ab6", color: "#3a0820", borderBottomLeftRadius: 10 }}>
                   <Flame size={10} /> AKSIYA · {cur.promo.endTime} gacha
@@ -4179,21 +4373,21 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
               <div className="absolute -bottom-1 -right-1 w-3 h-3 rounded-full" style={{ background: FELT_DARK }} />
 
               <div className="flex justify-between items-start mb-1">
-                <div className="font-display font-semibold text-sm" style={{ color: CREAM }}>🎯 {t.name}</div>
+                <div className="font-display font-semibold text-sm" style={{ color: CREAM }}><TableIco /> {t.name}</div>
                 {!playing && !paused && user.role === "owner" && (
                   <div className="flex gap-1">
-                    <button onClick={() => { setEditTableObj(t); setTName(t.name); setTRate(String(t.rate)); }}><Pencil size={12} style={{ color: "#b8c9bf" }} /></button>
+                    <button onClick={() => { setEditTableObj(t); setTName(t.name); setTRate(String(t.rate)); }}><Pencil size={12} style={{ color: "var(--pos-muted)" }} /></button>
                     <button onClick={() => { if (confirm(`"${t.name}" stolini o'chirasizmi?`)) onDeleteTable(t.id); }}><Trash2 size={12} style={{ color: RED }} /></button>
                   </div>
                 )}
               </div>
               {promoOn ? (
                 <div className="text-xs mb-3 flex items-center gap-1.5 flex-wrap">
-                  <span style={{ color: "#b8c9bf", textDecoration: "line-through" }}>{fmtMoney(t.rate)}</span>
+                  <span style={{ color: "var(--pos-muted)", textDecoration: "line-through" }}>{fmtMoney(t.rate)}</span>
                   <span className="font-bold" style={{ color: "#ffd1e6" }}>{fmtMoney(cur.rate)}/soat</span>
                 </div>
               ) : (
-                <div className="text-xs mb-3" style={{ color: "#b8c9bf" }}>{fmtMoney(t.rate)}/soat</div>
+                <div className="text-xs mb-3" style={{ color: "var(--pos-muted)" }}>{fmtMoney(t.rate)}/soat</div>
               )}
 
               {playing || paused ? (
@@ -4203,11 +4397,11 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
                       {fmtDuration(elapsedSeconds(t))} {paused && <span className="text-xs font-sans opacity-70">(pauzada)</span>}
                     </div>
                     <button type="button" onClick={() => { setExtraTimeTable(t); setExtraMinutes(""); setExtraMode("add"); }} title="Vaqt qo'shish / ayirish"
-                      className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "#b8c9bf" }}>
+                      className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "var(--pos-muted)" }}>
                       <Plus size={11} />
                     </button>
                     <button type="button" onClick={() => setViewTable(t)} title="Hozirgi hisobni ko'rish"
-                      className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "#b8c9bf" }}>
+                      className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ background: FELT_LIGHT, color: "var(--pos-muted)" }}>
                       <FileText size={11} />
                     </button>
                   </div>
@@ -4230,7 +4424,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
                     </div>
                   )}
                   {t.laps.length > 0 && (
-                    <div className="text-[11px] mb-2" style={{ color: "#b8c9bf" }}>🚩 {t.laps.length} ta znak qo'yilgan</div>
+                    <div className="text-[11px] mb-2" style={{ color: "var(--pos-muted)" }}>🚩 {t.laps.length} ta znak qo'yilgan</div>
                   )}
                   {playing && (
                     <div className="flex gap-1.5 mb-2">
@@ -4269,7 +4463,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
         })}
         {user.role === "owner" && (
           <button onClick={() => setShowCreate(true)} style={{ border: `1px dashed ${FELT_LIGHT}` }} className="rounded-2xl p-4 flex flex-col items-center justify-center gap-2 min-h-[150px]">
-            <Plus size={20} style={{ color: GOLD }} /><span className="text-xs" style={{ color: "#b8c9bf" }}>Stol qo'shish</span>
+            <Plus size={20} style={{ color: GOLD }} /><span className="text-xs" style={{ color: "var(--pos-muted)" }}>Stol qo'shish</span>
           </button>
         )}
       </div>
@@ -4305,7 +4499,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
                 <Flame size={13} className="inline mr-1" />Aksiya: <span style={{ textDecoration: "line-through", opacity: 0.7 }}>{fmtMoney(confirmStart.rate)}</span> <b>{fmtMoney(cr.rate)}/soat</b> — {cr.promo.endTime} gacha. Undan keyin {fmtMoney(confirmStart.rate)}/soat dan hisoblanadi.
               </div>
             ) : (
-              <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Narx: {fmtMoney(confirmStart.rate)}/soat</p>
+              <p className="text-sm mb-4" style={{ color: "var(--pos-muted)" }}>Narx: {fmtMoney(confirmStart.rate)}/soat</p>
             );
           })()}
 
@@ -4322,7 +4516,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
 
           {startMode === "amount" && (
             <div className="mb-4">
-              <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>To'langan summa (so'm)</div>
+              <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>To'langan summa (so'm)</div>
               <input value={startAmount} onChange={(e) => setStartAmount(e.target.value.replace(/[^0-9]/g, ""))} placeholder="masalan 35000"
                 className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
               {startAmount && (
@@ -4355,7 +4549,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
         <Modal onClose={addingCart ? null : () => { setActiveTable(null); setSearch(""); setCart({}); }}>
           <h2 className="font-display text-lg font-semibold mb-3" style={{ color: CREAM }}>{activeTable.name} — mahsulot qo'shish</h2>
           <div className="relative mb-3">
-            <Search size={14} style={{ color: "#8fa398" }} className="absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search size={14} style={{ color: "var(--pos-muted2)" }} className="absolute left-3 top-1/2 -translate-y-1/2" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Qidirish..."
               className="w-full pl-9 pr-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
@@ -4394,7 +4588,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
           </div>
           {Object.keys(cart).length > 0 && (
             <div className="flex justify-between items-baseline mb-3 px-1">
-              <span className="text-xs" style={{ color: "#b8c9bf" }}>Jami: {Object.values(cart).reduce((s, q) => s + q, 0)} ta mahsulot</span>
+              <span className="text-xs" style={{ color: "var(--pos-muted)" }}>Jami: {Object.values(cart).reduce((s, q) => s + q, 0)} ta mahsulot</span>
               <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>
                 {fmtMoney(bar.reduce((s, b) => s + (cart[b.id] || 0) * b.price, 0))}
               </span>
@@ -4424,7 +4618,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
       {confirmClose && (
         <Modal onClose={() => setConfirmClose(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>"{confirmClose.name}" ni yopasizmi?</h2>
-          <p className="text-sm mb-5" style={{ color: "#b8c9bf" }}>Chek tayyorlanadi va stol bo'shatiladi</p>
+          <p className="text-sm mb-5" style={{ color: "var(--pos-muted)" }}>Chek tayyorlanadi va stol bo'shatiladi</p>
           <div className="flex gap-2">
             <button onClick={() => setConfirmClose(null)} className="flex-1 py-3 rounded-xl text-sm" style={{ background: FELT_DARK, color: CREAM }}>Bekor</button>
             <button onClick={() => {
@@ -4457,14 +4651,14 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
       {lapTable && (
         <Modal onClose={() => setLapTable(null)}>
           <h2 className="font-display text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: CREAM }}><Flag size={17} /> {lapTable.name} — znak qo'yish</h2>
-          <p className="text-sm mb-2" style={{ color: "#b8c9bf" }}>Hozirgi segment (oxirgi znakdan yoki boshlanishdan hozirgacha) alohida yozib qo'yiladi, stol yopilmaydi.</p>
+          <p className="text-sm mb-2" style={{ color: "var(--pos-muted)" }}>Hozirgi segment (oxirgi znakdan yoki boshlanishdan hozirgacha) alohida yozib qo'yiladi, stol yopilmaydi.</p>
           {(() => {
             const lastEnd = lapTable.laps.length > 0 ? Math.max(...lapTable.laps.map((l) => l.end)) : lapTable.startTime;
             const segSeconds = Math.max(0, (now - lastEnd) / 1000);
             const segCost = lapCostOf(lapTable, lastEnd, now);
             return (
               <div className="flex items-center justify-between mb-4 px-3 py-2 rounded-lg" style={{ background: FELT_DARK }}>
-                <span className="text-xs" style={{ color: "#b8c9bf" }}>Shu segment: {fmtDuration(segSeconds)}</span>
+                <span className="text-xs" style={{ color: "var(--pos-muted)" }}>Shu segment: {fmtDuration(segSeconds)}</span>
                 <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(segCost)}</span>
               </div>
             );
@@ -4488,13 +4682,13 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
               </button>
             ))}
           </div>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>
+          <p className="text-sm mb-4" style={{ color: "var(--pos-muted)" }}>
             {extraMode === "add"
               ? "Masalan band bo'lib vaqtida ochishga ulgurmagan bo'lsangiz — necha daqiqa o'tganini kiriting, hisoblagichga shuncha qo'shiladi."
               : "Masalan stolni oldinroq ochib qo'ygan bo'lsangiz yoki ortiqcha qo'shilgan bo'lsa — necha daqiqa ayirish kerakligini kiriting."}
           </p>
           <div className="mb-3">
-            <label className="text-xs mb-1.5 block" style={{ color: "#b8c9bf" }}>{extraMode === "add" ? "Necha daqiqa qo'shilsin" : "Necha daqiqa ayirilsin"}</label>
+            <label className="text-xs mb-1.5 block" style={{ color: "var(--pos-muted)" }}>{extraMode === "add" ? "Necha daqiqa qo'shilsin" : "Necha daqiqa ayirilsin"}</label>
             <input type="number" inputMode="numeric" value={extraMinutes} onChange={(e) => setExtraMinutes(e.target.value)} placeholder="masalan 15"
               className="w-full px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           </div>
@@ -4536,14 +4730,14 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
       {transferTable && (
         <Modal onClose={() => { setTransferTable(null); setTransferDest(null); }}>
           <h2 className="font-display text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: CREAM }}><ArrowLeftRight size={17} /> "{transferTable.name}"ni ko'chirish</h2>
-          <p className="text-sm mb-4" style={{ color: "#b8c9bf" }}>Hisoblagich, izoh va mahsulotlar shu bo'sh stolga o'tadi, "{transferTable.name}" esa bo'shab qoladi.</p>
+          <p className="text-sm mb-4" style={{ color: "var(--pos-muted)" }}>Hisoblagich, izoh va mahsulotlar shu bo'sh stolga o'tadi, "{transferTable.name}" esa bo'shab qoladi.</p>
           <div className="max-h-64 overflow-y-auto mb-4 space-y-3">
             {(allHalls || []).map((h) => {
               const freeTables = h.tables.filter((t) => t.status === "free" && t.id !== transferTable.id);
               if (freeTables.length === 0) return null;
               return (
                 <div key={h.id}>
-                  <div className="text-[11px] font-semibold mb-1.5" style={{ color: "#b8c9bf" }}>{h.name}</div>
+                  <div className="text-[11px] font-semibold mb-1.5" style={{ color: "var(--pos-muted)" }}>{h.name}</div>
                   <div className="grid grid-cols-3 gap-1.5">
                     {freeTables.map((t) => (
                       <button key={t.id} onClick={() => setTransferDest({ hallId: h.id, tableId: t.id })}
@@ -4557,7 +4751,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
               );
             })}
             {(allHalls || []).every((h) => h.tables.filter((t) => t.status === "free" && t.id !== transferTable.id).length === 0) && (
-              <p className="text-sm text-center py-4" style={{ color: "#b8c9bf" }}>Hozircha bo'sh stol yo'q</p>
+              <p className="text-sm text-center py-4" style={{ color: "var(--pos-muted)" }}>Hozircha bo'sh stol yo'q</p>
             )}
           </div>
           <button disabled={!transferDest} onClick={() => {
@@ -4575,7 +4769,7 @@ function HallScreen({ user, hall, allHalls, bar, now: _nowProp, promos = [], onB
             duration={receipt.duration} tableCost={receipt.tableCost} breakdown={receipt.breakdown} extras={receipt.extras} extrasCost={receipt.extrasCost}
             laps={receipt.laps} generalNote={receipt.generalNote} />
           <div className="mb-2">
-            <div className="text-xs mb-1.5" style={{ color: "#b8c9bf" }}>To'lov turi</div>
+            <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted)" }}>To'lov turi</div>
             <div className="grid grid-cols-2 gap-1.5">
               {[["naqd", "Naqd"], ["karta", "Karta"]].map(([val, label]) => (
                 <button key={val} onClick={() => setPaymentMethod(val)}
@@ -4606,7 +4800,7 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
       <div className="text-center mb-4">
         <div className="font-mono text-xs opacity-60 mb-1" style={{ color: CREAM }}>CHEK</div>
         <div className="font-display text-lg font-semibold" style={{ color: CREAM }}>{title}</div>
-        <div className="text-xs mt-1" style={{ color: "#8fa398" }}>{fmtDate(end)} · {fmtTime(start)}—{fmtTime(end)}</div>
+        <div className="text-xs mt-1" style={{ color: "var(--pos-muted2)" }}>{fmtDate(end)} · {fmtTime(start)}—{fmtTime(end)}</div>
       </div>
       {generalNote && (
         <div className="text-xs mb-3 px-3 py-2 rounded-lg flex items-start gap-1.5" style={{ background: "rgba(201,162,39,0.12)", color: GOLD }}>
@@ -4614,12 +4808,12 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
         </div>
       )}
       <div className="border-t border-dashed pb-3 mb-3" style={{ borderColor: FELT_LIGHT }} />
-      <div className="flex justify-between text-sm mb-2" style={{ color: "#b8c9bf" }}><span>O'yin vaqti</span><span className="font-mono" style={{ color: CREAM }}>{fmtDuration(duration)}</span></div>
-      <div className="flex justify-between text-sm mb-2" style={{ color: "#b8c9bf" }}><span>Stol narxi</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(tableCost)}</span></div>
+      <div className="flex justify-between text-sm mb-2" style={{ color: "var(--pos-muted)" }}><span>O'yin vaqti</span><span className="font-mono" style={{ color: CREAM }}>{fmtDuration(duration)}</span></div>
+      <div className="flex justify-between text-sm mb-2" style={{ color: "var(--pos-muted)" }}><span>Stol narxi</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(tableCost)}</span></div>
       {breakdown && breakdown.some((b) => b.promo) && (
         <div className="mb-2 px-3 py-2 rounded-lg" style={{ background: "rgba(255,122,182,0.1)", border: "1px dashed #ff7ab6" }}>
           {breakdown.filter((b) => b.sec >= 1).map((b, i) => (
-            <div key={i} className="flex justify-between text-xs mb-0.5" style={{ color: b.promo ? "#ffd1e6" : "#b8c9bf" }}>
+            <div key={i} className="flex justify-between text-xs mb-0.5" style={{ color: b.promo ? "#ffd1e6" : "var(--pos-muted)" }}>
               <span>{b.promo ? "🔥 Aksiya" : "Oddiy narx"}: {fmtDuration(b.sec)} × {fmtMoney(b.rate)}/soat</span>
               <span className="font-mono">{fmtMoney(b.cost)}</span>
             </div>
@@ -4630,10 +4824,10 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
       {laps && laps.length > 1 && (
         <>
           <div className="border-t border-dashed py-2 mb-1" style={{ borderColor: FELT_LIGHT }} />
-          <div className="text-[11px] uppercase tracking-wide mb-1.5" style={{ color: "#8fa398" }}>🚩 Znaklar bo'yicha taqsimot</div>
+          <div className="text-[11px] uppercase tracking-wide mb-1.5" style={{ color: "var(--pos-muted2)" }}>🚩 Znaklar bo'yicha taqsimot</div>
           {laps.map((l, i) => (
             <div key={i} className="mb-1.5">
-              <div className="flex justify-between text-sm" style={{ color: "#b8c9bf" }}>
+              <div className="flex justify-between text-sm" style={{ color: "var(--pos-muted)" }}>
                 <span>{i + 1}. {fmtDuration(l.duration)}{l.comment ? ` — ${l.comment}` : ""}</span>
                 <span className="font-mono" style={{ color: CREAM }}>{fmtMoney(l.cost)}</span>
               </div>
@@ -4645,7 +4839,7 @@ function ReceiptView({ title, start, end, duration, tableCost, extras, extrasCos
       {extras.length > 0 && (
         <>
           <div className="border-t border-dashed py-2 mb-1" style={{ borderColor: FELT_LIGHT }} />
-          {extras.map((e, i) => <div key={e.id || i} className="flex justify-between text-sm mb-1.5" style={{ color: "#b8c9bf" }}><span>{e.name}</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(e.price)}</span></div>)}
+          {extras.map((e, i) => <div key={e.id || i} className="flex justify-between text-sm mb-1.5" style={{ color: "var(--pos-muted)" }}><span>{e.name}</span><span className="font-mono" style={{ color: CREAM }}>{fmtMoney(e.price)}</span></div>)}
         </>
       )}
       <div className="border-t pb-3 mt-3 mb-3" style={{ borderColor: FELT_LIGHT }} />
@@ -4675,20 +4869,20 @@ function StaffDailyStats({ history, warehouseLogs, warehouseItems, onBack }) {
   const total = todays.reduce((s, h) => s + h.total, 0);
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
-      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
+      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "var(--pos-muted)" }}><ArrowLeft size={16} /> Orqaga</button>
       <h1 className="font-display text-2xl font-semibold mb-1" style={{ color: CREAM }}>Bugungi hisobot</h1>
-      <p className="text-xs mb-6" style={{ color: "#8fa398" }}>08:00 dan hozirgacha</p>
+      <p className="text-xs mb-6" style={{ color: "var(--pos-muted2)" }}>08:00 dan hozirgacha</p>
       <div style={{ background: "rgba(201,162,39,0.12)", border: `1px solid ${GOLD}`, borderRadius: 16 }} className="p-4 mb-5 flex justify-between items-center">
         <span className="text-sm font-semibold" style={{ color: GOLD }}>{todays.length} ta yozuv</span>
         <span className="font-mono text-lg font-bold" style={{ color: GOLD }}>{fmtMoney(total)}</span>
       </div>
       <div className="space-y-2">
-        {todays.length === 0 && <p className="text-sm text-center py-10" style={{ color: "#b8c9bf" }}>Hali bugun yozuv yo'q</p>}
+        {todays.length === 0 && <p className="text-sm text-center py-10" style={{ color: "var(--pos-muted)" }}>Hali bugun yozuv yo'q</p>}
         {todays.map((h) => (
           <button key={h.id} onClick={() => setSelected(h)} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}`, borderRadius: 14 }} className="w-full p-3.5 flex justify-between items-center text-left">
             <div>
               <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-              <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}</div>
+              <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}</div>
             </div>
             <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
           </button>
@@ -4719,7 +4913,7 @@ function HistoryWindowNote({ historySince, onNeedOlder }) {
   if (!historySince) return null;
   return (
     <div className="rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-3" style={{ background: FELT_DARK, border: `1px dashed ${FELT_LIGHT}` }}>
-      <span className="text-xs" style={{ color: "#b8c9bf" }}>Tez ishlashi uchun {fmtDate(historySince)} dan keyingi tarix ko'rsatilmoqda. Eskisi bazada saqlangan.</span>
+      <span className="text-xs" style={{ color: "var(--pos-muted)" }}>Tez ishlashi uchun {fmtDate(historySince)} dan keyingi tarix ko'rsatilmoqda. Eskisi bazada saqlangan.</span>
       <button disabled={busy} onClick={async () => { setBusy(true); try { await onNeedOlder(0); } finally { setBusy(false); } }}
         className="text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap disabled:opacity-50" style={{ background: GOLD, color: FELT_DARK }}>
         {busy ? "Yuklanmoqda…" : "Hammasini yuklash"}
@@ -4795,7 +4989,7 @@ function StatsScreen({ history, historySince, onNeedOlder, shifts, warehouseLogs
 
   return (
     <div className="min-h-screen px-5 py-6 max-w-2xl mx-auto">
-      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
+      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "var(--pos-muted)" }}><ArrowLeft size={16} /> Orqaga</button>
       <h1 className="font-display text-2xl font-semibold mb-4" style={{ color: CREAM }}>Statistika</h1>
       <HistoryWindowNote historySince={historySince} onNeedOlder={onNeedOlder} />
 
@@ -4810,7 +5004,7 @@ function StatsScreen({ history, historySince, onNeedOlder, shifts, warehouseLogs
       </div>
 
       <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-6">
-        <div className="text-xs mb-3 flex items-center gap-1.5" style={{ color: "#8fa398" }}><CalendarRange size={13} /> Sana oralig'ini tanlang</div>
+        <div className="text-xs mb-3 flex items-center gap-1.5" style={{ color: "var(--pos-muted2)" }}><CalendarRange size={13} /> Sana oralig'ini tanlang</div>
         <div className="flex gap-2 mb-3">
           <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="flex-1 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
@@ -4827,14 +5021,14 @@ function StatsScreen({ history, historySince, onNeedOlder, shifts, warehouseLogs
                 <div key={g.key}>
                   <div className="flex justify-between items-center mb-1.5 px-1">
                     <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
-                    <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
+                    <span className="text-[11px] font-mono" style={{ color: "var(--pos-muted2)" }}>{fmtMoney(g.total)}</span>
                   </div>
                   <div className="space-y-1.5">
                     {g.items.map((h) => (
                       <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-3 py-2.5 rounded-lg text-left" style={{ background: FELT_DARK }}>
                         <div>
                           <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-                          <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.openedByName ? ` · Ochdi: ${h.openedByName}` : ""}{h.actorName ? ` · Yopdi: ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
+                          <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.openedByName ? ` · Ochdi: ${h.openedByName}` : ""}{h.actorName ? ` · Yopdi: ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
                         </div>
                         <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
                       </button>
@@ -4859,13 +5053,13 @@ function StatsScreen({ history, historySince, onNeedOlder, shifts, warehouseLogs
           <div key={g.key} className="pt-3">
             <div className="flex justify-between items-center px-5 pb-2">
               <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 Smena: {g.label}</span>
-              <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
+              <span className="text-[11px] font-mono" style={{ color: "var(--pos-muted2)" }}>{fmtMoney(g.total)}</span>
             </div>
             {g.items.map((h) => (
               <button key={h.id} onClick={() => setSelected(h)} className="w-full flex justify-between items-center px-5 py-3 text-left" style={{ borderTop: `1px dashed ${FELT_LIGHT}` }}>
                 <div>
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-                  <div className="text-xs" style={{ color: "#8fa398" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}{h.openedByName ? ` · Ochdi: ${h.openedByName}` : ""}{h.actorName ? ` · Yopdi: ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
+                  <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>{fmtDate(h.endTime)} · {fmtTime(h.startTime)}–{fmtTime(h.endTime)} · {fmtDuration(h.duration)}{h.openedByName ? ` · Ochdi: ${h.openedByName}` : ""}{h.actorName ? ` · Yopdi: ${h.actorName}` : ""}{h.paymentMethod ? ` · ${h.paymentMethod}` : ""}</div>
                 </div>
                 <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
               </button>
@@ -4900,9 +5094,9 @@ function StatsScreen({ history, historySince, onNeedOlder, shifts, warehouseLogs
 function PeriodCard({ label, s }) {
   return (
     <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3">
-      <div className="text-[11px] mb-2" style={{ color: "#8fa398" }}>{label}</div>
+      <div className="text-[11px] mb-2" style={{ color: "var(--pos-muted2)" }}>{label}</div>
       <div className="font-display text-lg font-bold mb-0.5" style={{ color: CREAM }}>{s.count}</div>
-      <div className="text-[10px] mb-1.5" style={{ color: "#8fa398" }}>savdo</div>
+      <div className="text-[10px] mb-1.5" style={{ color: "var(--pos-muted2)" }}>savdo</div>
       <div className="font-mono text-xs font-semibold" style={{ color: GOLD }}>{fmtMoney(s.total)}</div>
     </div>
   );
@@ -4913,7 +5107,7 @@ function SupportScreen({ messages, onSend, onBack }) {
   const [text, setText] = useState("");
   return (
     <div className="min-h-screen flex flex-col max-w-2xl mx-auto px-5 py-6">
-      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "#b8c9bf" }}><ArrowLeft size={16} /> Orqaga</button>
+      <button onClick={onBack} className="flex items-center gap-1 text-sm mb-4" style={{ color: "var(--pos-muted)" }}><ArrowLeft size={16} /> Orqaga</button>
       <h1 className="font-display text-xl font-semibold mb-4" style={{ color: CREAM }}>Yordam / Support</h1>
       <div className="flex-1 space-y-2 mb-4 overflow-y-auto" style={{ minHeight: 300 }}>
         {messages.length === 0 && <p className="text-sm opacity-50 text-center mt-10" style={{ color: CREAM }}>Hali xabar yo'q. Savolingizni yozing.</p>}
@@ -4976,8 +5170,8 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2"><ShieldCheck size={20} style={{ color: GOLD }} /><span className="font-display text-lg font-semibold" style={{ color: CREAM }}>Billiard POS — Admin</span></div>
         <div className="flex items-center gap-3">
-          <button onClick={() => setShowPass(true)} title="Parolni almashtirish"><Settings size={18} style={{ color: "#b8c9bf" }} /></button>
-          <button onClick={onLogout}><LogOut size={18} style={{ color: "#b8c9bf" }} /></button>
+          <button onClick={() => setShowPass(true)} title="Parolni almashtirish"><Settings size={18} style={{ color: "var(--pos-muted)" }} /></button>
+          <button onClick={onLogout}><LogOut size={18} style={{ color: "var(--pos-muted)" }} /></button>
         </div>
       </div>
 
@@ -4995,7 +5189,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
       <div className="flex gap-2 mb-6 flex-wrap">
         {[["stats", "Statistika"], ["users", "Foydalanuvchilar"], ["plans", "Tariflar"], ["promo", "Promokodlar"], ["messages", "Xabarlar"], ["admins", "Adminlar"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} className="px-3.5 py-2 rounded-full text-xs font-medium relative"
-            style={{ background: tab === k ? GOLD : FELT, color: tab === k ? FELT_DARK : "#b8c9bf", border: `1px solid ${FELT_LIGHT}` }}>
+            style={{ background: tab === k ? GOLD : FELT, color: tab === k ? FELT_DARK : "var(--pos-muted)", border: `1px solid ${FELT_LIGHT}` }}>
             {l}
             {k === "messages" && adminUnreadUserCount > 0 && (
               <span className="absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center text-[10px] font-bold" style={{ background: RED, color: "#fff" }}>
@@ -5047,18 +5241,18 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                     )}
                     {u.telegramVerified && <span title="Telegram ulangan" className="text-[10px]">📲</span>}
                     <button onClick={() => { setChatUser(u); onOpenChat(u.id); }} className="relative">
-                      <MessageCircle size={16} style={{ color: "#b8c9bf" }} />
+                      <MessageCircle size={16} style={{ color: "var(--pos-muted)" }} />
                       {unread && <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full" style={{ background: RED }} />}
                     </button>
                   </div>
                 </div>
-                <div className="text-xs font-mono mb-1" style={{ color: "#8fa398" }}>{u.phone} · @{u.login}</div>
-                <div className="text-xs mb-1" style={{ color: "#8fa398" }}>Ro'yxatdan o'tgan: {fmtDate(u.createdAt)}</div>
+                <div className="text-xs font-mono mb-1" style={{ color: "var(--pos-muted2)" }}>{u.phone} · @{u.login}</div>
+                <div className="text-xs mb-1" style={{ color: "var(--pos-muted2)" }}>Ro'yxatdan o'tgan: {fmtDate(u.createdAt)}</div>
                 {myStaff.length > 0 && (
                   <div className="mb-3 pl-3 border-l-2 space-y-1" style={{ borderColor: GOLD }}>
                     <div className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}><Users size={11} /> Ishchilari ({myStaff.length}):</div>
                     {myStaff.map((s) => (
-                      <div key={s.id} className="flex items-center justify-between text-xs" style={{ color: "#b8c9bf" }}>
+                      <div key={s.id} className="flex items-center justify-between text-xs" style={{ color: "var(--pos-muted)" }}>
                         <span>👤 {s.name} · @{s.login}</span>
                         <button onClick={() => { if (confirm(`"${s.name}" ishchisini o'chirasizmi?`)) onDeleteUser(s.id); }}>
                           <Trash2 size={12} style={{ color: RED }} />
@@ -5120,7 +5314,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
           {isSuperAdmin && (
             <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
               <div className="flex items-center justify-between mb-3">
-                <div className="text-xs" style={{ color: "#8fa398" }}>Bepul sinov muddati (hozir: {trialDays} kun)</div>
+                <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>Bepul sinov muddati (hozir: {trialDays} kun)</div>
                 <button onClick={() => onSetTrialEnabled(!trialEnabled)}
                   className="text-xs px-3 py-1.5 rounded-lg font-semibold" style={{ background: trialEnabled ? "rgba(123,191,106,0.18)" : "rgba(178,58,58,0.15)", color: trialEnabled ? "#7bbf6a" : "#e88" }}>
                   {trialEnabled ? "🟢 YOQIQ" : "⛔ O'CHIRILGAN"}
@@ -5136,20 +5330,20 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
           )}
           {isSuperAdmin ? (
             <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
-              <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi tarif qo'shish</div>
+              <div className="text-xs mb-3" style={{ color: "var(--pos-muted2)" }}>Yangi tarif qo'shish</div>
               <div className="flex gap-2 mb-3">
                 <div className="flex-1">
-                  <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Necha oy</div>
+                  <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>Necha oy</div>
                   <input value={planMonths} onChange={(e) => setPlanMonths(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="masalan 6"
                     className="w-full px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
                 </div>
                 <div className="flex-1">
-                  <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Narxi (so'm)</div>
+                  <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>Narxi (so'm)</div>
                   <input value={planPrice} onChange={(e) => setPlanPrice(e.target.value.replace(/[^0-9]/g, ""))} placeholder="masalan 700000"
                     className="w-full px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
                 </div>
               </div>
-              <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Tarif turi</div>
+              <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>Tarif turi</div>
               <div className="flex gap-2 mb-3">
                 {[["basic", "🟢 Oddiy"], ["pro", "⭐ Pro"]].map(([k, l]) => (
                   <button key={k} onClick={() => setPlanTier(k)} className="flex-1 py-2 rounded-lg text-sm font-semibold"
@@ -5161,7 +5355,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                 style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">Qo'shish</button>
             </div>
           ) : (
-            <p className="text-xs mb-4 px-1" style={{ color: "#8fa398" }}>Tarif qo'shish/o'chirish faqat bosh admin uchun mavjud</p>
+            <p className="text-xs mb-4 px-1" style={{ color: "var(--pos-muted2)" }}>Tarif qo'shish/o'chirish faqat bosh admin uchun mavjud</p>
           )}
           <div className="space-y-2">
             {plans.length === 0 && <p className="text-sm opacity-50" style={{ color: CREAM }}>Hali tarif yo'q</p>}
@@ -5193,10 +5387,10 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
       {tab === "promo" && (
         <div>
           <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
-            <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi promokod yaratish</div>
+            <div className="text-xs mb-3" style={{ color: "var(--pos-muted2)" }}>Yangi promokod yaratish</div>
             <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Masalan ASLIDDIN10"
               className="w-full mb-3 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
-            <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Necha kunlik obuna beradi (faollashtirilgan kundan boshlab)</div>
+            <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>Necha kunlik obuna beradi (faollashtirilgan kundan boshlab)</div>
             <input value={promoDays} onChange={(e) => setPromoDays(e.target.value.replace(/[^0-9]/g, ""))} placeholder="masalan 3"
               className="w-full mb-3 px-3 py-2.5 rounded-lg outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
             <button disabled={!code.trim() || !promoDays} onClick={() => {
@@ -5212,7 +5406,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                 <div key={p.code} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="flex items-center justify-between px-4 py-3 rounded-xl">
                   <div>
                     <div className="font-mono text-sm" style={{ color: CREAM }}>{p.code}</div>
-                    <div className="text-[11px]" style={{ color: "#8fa398" }}>{p.durationDays} kunlik obuna beradi</div>
+                    <div className="text-[11px]" style={{ color: "var(--pos-muted2)" }}>{p.durationDays} kunlik obuna beradi</div>
                   </div>
                   <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ background: "rgba(255,255,255,0.06)", color }}>{status}</span>
                 </div>
@@ -5225,7 +5419,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
       {tab === "messages" && (
         <div>
           <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
-            <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Xabar yuborish</div>
+            <div className="text-xs mb-3" style={{ color: "var(--pos-muted2)" }}>Xabar yuborish</div>
             <select value={broadcastTarget} onChange={(e) => setBroadcastTarget(e.target.value)}
               className="w-full mb-3 px-3 py-2.5 rounded-lg outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }}>
               <option value="all">Hammaga</option>
@@ -5238,7 +5432,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
               <Send size={14} /> Yuborish
             </button>
           </div>
-          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Foydalanuvchi bilan suhbat</div>
+          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--pos-muted2)" }}>Foydalanuvchi bilan suhbat</div>
           <div className="space-y-2">
             {users.map((u) => {
               const unread = (chats[u.id] || []).some((m) => m.from === "user" && !m.readByAdmin);
@@ -5248,7 +5442,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                   <span className="text-sm" style={{ color: CREAM }}>{u.name}</span>
                   <div className="flex items-center gap-2">
                     {unread && <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: RED, color: "#fff" }}>yangi</span>}
-                    <MessageCircle size={15} style={{ color: "#b8c9bf" }} />
+                    <MessageCircle size={15} style={{ color: "var(--pos-muted)" }} />
                   </div>
                 </button>
               );
@@ -5261,7 +5455,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
         <div>
           {isSuperAdmin ? (
             <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4 mb-4">
-              <div className="text-xs mb-3" style={{ color: "#8fa398" }}>Yangi admin yaratish</div>
+              <div className="text-xs mb-3" style={{ color: "var(--pos-muted2)" }}>Yangi admin yaratish</div>
               <Field label="Ism" value={newAdminName} onChange={setNewAdminName} />
               <Field label="Login" value={newAdminLogin} onChange={setNewAdminLogin} />
               <Field label="Parol (kamida 8 belgi)" value={newAdminPass} onChange={setNewAdminPass} type="password" />
@@ -5270,14 +5464,14 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
                 style={{ background: GOLD, color: FELT_DARK }} className="w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40">Yaratish</button>
             </div>
           ) : (
-            <p className="text-xs mb-4 px-1" style={{ color: "#8fa398" }}>Yangi admin yaratish faqat bosh admin uchun mavjud</p>
+            <p className="text-xs mb-4 px-1" style={{ color: "var(--pos-muted2)" }}>Yangi admin yaratish faqat bosh admin uchun mavjud</p>
           )}
           <div className="space-y-2">
             {adminAccounts.map((a) => (
               <div key={a.login} style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 flex items-center justify-between">
                 <div>
                   <div className="text-sm font-medium" style={{ color: CREAM }}>{a.name}</div>
-                  <div className="text-xs font-mono" style={{ color: "#8fa398" }}>@{a.login}</div>
+                  <div className="text-xs font-mono" style={{ color: "var(--pos-muted2)" }}>@{a.login}</div>
                 </div>
                 {isSuperAdmin && a.login.toLowerCase() !== "asliddin" && (
                   <button onClick={() => { if (confirm(`${a.name} adminini o'chirasizmi?`)) onDeleteAdmin(a.login); }}>
@@ -5295,15 +5489,15 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
           <h2 className="font-display text-lg font-semibold mb-4" style={{ color: CREAM }}>{banTarget.name} — ban berish</h2>
           <div className="flex gap-2 mb-3">
             <div className="flex-1">
-              <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Kun</div>
+              <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>Kun</div>
               <input value={banDays} onChange={(e) => setBanDays(e.target.value.replace(/[^0-9]/g, ""))} className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
             </div>
             <div className="flex-1">
-              <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Soat</div>
+              <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>Soat</div>
               <input value={banHours} onChange={(e) => setBanHours(e.target.value.replace(/[^0-9]/g, ""))} className="w-full px-4 py-3 rounded-xl outline-none text-sm font-mono" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
             </div>
           </div>
-          <div className="text-xs mb-1.5" style={{ color: "#8fa398" }}>Sabab</div>
+          <div className="text-xs mb-1.5" style={{ color: "var(--pos-muted2)" }}>Sabab</div>
           <input value={banReason} onChange={(e) => setBanReason(e.target.value)} className="w-full mb-4 px-4 py-3 rounded-xl outline-none text-sm" style={{ background: FELT_DARK, color: CREAM, border: `1px solid ${FELT_LIGHT}` }} />
           <button onClick={() => { onBan(banTarget.id, Number(banDays) || 0, Number(banHours) || 0, banReason.trim()); setBanTarget(null); setBanDays("3"); setBanHours("0"); setBanReason(""); }}
             style={{ background: RED, color: "#fff" }} className="w-full py-3 rounded-xl font-semibold text-sm">Ban berish</button>
@@ -5313,7 +5507,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
       {deleteUserTarget && (
         <Modal onClose={() => setDeleteUserTarget(null)}>
           <h2 className="font-display text-lg font-semibold mb-2" style={{ color: CREAM }}>{deleteUserTarget.name} ni butunlay o'chirasizmi?</h2>
-          <p className="text-sm mb-5" style={{ color: "#b8c9bf" }}>Bu akkaunt va uning barcha zallari, stollari, tarixi qaytarib bo'lmas tarzda o'chib ketadi.</p>
+          <p className="text-sm mb-5" style={{ color: "var(--pos-muted)" }}>Bu akkaunt va uning barcha zallari, stollari, tarixi qaytarib bo'lmas tarzda o'chib ketadi.</p>
           <div className="flex gap-2">
             <button onClick={() => setDeleteUserTarget(null)} className="flex-1 py-3 rounded-xl text-sm" style={{ background: FELT_DARK, color: CREAM }}>Bekor</button>
             <button onClick={() => { onDeleteUser(deleteUserTarget.id); setDeleteUserTarget(null); }} style={{ background: RED, color: "#fff" }} className="flex-1 py-3 rounded-xl text-sm font-semibold">O'chirish</button>
@@ -5351,7 +5545,7 @@ function AdminScreen({ users, promoCodes, chats, adminAccounts, openShiftOwners,
           <Field label="Telefon (+998991234567)" value={nuPhone} onChange={setNuPhone} />
           <Field label="Login" value={nuLogin} onChange={setNuLogin} />
           <Field label="Parol" value={nuPass} onChange={setNuPass} type="password" />
-          <div className="text-xs mb-2" style={{ color: "#8fa398" }}>Turi</div>
+          <div className="text-xs mb-2" style={{ color: "var(--pos-muted2)" }}>Turi</div>
           <div className="flex gap-2 mb-5">
             <button onClick={() => setNuType("oddiy")} className="flex-1 py-2.5 rounded-xl text-sm font-medium"
               style={{ background: nuType === "oddiy" ? GOLD : FELT_DARK, color: nuType === "oddiy" ? FELT_DARK : CREAM, border: `1px solid ${FELT_LIGHT}` }}>Oddiy</button>
@@ -5413,7 +5607,7 @@ function UserPanelView({ user, halls, bar, history, shifts }) {
         {user.name} — panel
         {openShiftObj && <span className="text-[10px] font-normal px-2 py-0.5 rounded-full" style={{ background: "rgba(123,191,106,0.18)", color: "#7bbf6a" }}>🟢 Smena ochiq</span>}
       </h2>
-      <p className="text-xs mb-1" style={{ color: "#8fa398" }}>@{user.login} · {user.phone}</p>
+      <p className="text-xs mb-1" style={{ color: "var(--pos-muted2)" }}>@{user.login} · {user.phone}</p>
       {openShiftObj && (
         <p className="text-xs mb-1" style={{ color: "#7bbf6a" }}>Smena: {openShiftObj.openedByName} · {fmtDate(openShiftObj.openedAt)} · {fmtTime(openShiftObj.openedAt)} dan beri</p>
       )}
@@ -5423,18 +5617,18 @@ function UserPanelView({ user, halls, bar, history, shifts }) {
         </p>
       )}
 
-      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Zallar</div>
+      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--pos-muted2)" }}>Zallar</div>
       <div className="grid grid-cols-2 gap-2 mb-4">
         {halls.length === 0 && <p className="text-sm opacity-50 col-span-2" style={{ color: CREAM }}>Zal yo'q</p>}
         {halls.map((h) => (
           <div key={h.id} style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3">
-            <div className="text-sm font-medium" style={{ color: CREAM }}>🎱 {h.name}</div>
-            <div className="text-xs" style={{ color: "#8fa398" }}>{h.tables.length} stol · {h.tables.filter((t) => t.status === "playing").length} band</div>
+            <div className="text-sm font-medium flex items-center gap-1.5" style={{ color: CREAM }}><Ball size={18} /> {h.name}</div>
+            <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>{h.tables.length} stol · {h.tables.filter((t) => t.status === "playing").length} band</div>
           </div>
         ))}
       </div>
 
-      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Bar menyu</div>
+      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--pos-muted2)" }}>Bar menyu</div>
       <div className="flex flex-wrap gap-2 mb-4">
         {bar.length === 0 && <p className="text-sm opacity-50" style={{ color: CREAM }}>Mahsulot yo'q</p>}
         {bar.map((b) => (
@@ -5444,26 +5638,26 @@ function UserPanelView({ user, halls, bar, history, shifts }) {
         ))}
       </div>
 
-      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Statistika</div>
+      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--pos-muted2)" }}>Statistika</div>
       <div className="grid grid-cols-3 gap-2 mb-4">
         <PeriodCard label="Bugun" s={dS} /><PeriodCard label="7 kun" s={wS} /><PeriodCard label="30 kun" s={mS} />
       </div>
 
-      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "#8fa398" }}>Tarix — smena bo'yicha</div>
+      <div className="text-xs uppercase tracking-wide mb-2" style={{ color: "var(--pos-muted2)" }}>Tarix — smena bo'yicha</div>
       <div className="space-y-3 max-h-72 overflow-y-auto">
         {history.length === 0 && <p className="text-sm opacity-50" style={{ color: CREAM }}>Hali tarix yo'q</p>}
         {historyGroups.map((g) => (
           <div key={g.key}>
             <div className="flex justify-between items-center mb-1 px-1">
               <span className="text-[11px] font-semibold flex items-center gap-1" style={{ color: GOLD }}>🕒 {g.label}</span>
-              <span className="text-[11px] font-mono" style={{ color: "#8fa398" }}>{fmtMoney(g.total)}</span>
+              <span className="text-[11px] font-mono" style={{ color: "var(--pos-muted2)" }}>{fmtMoney(g.total)}</span>
             </div>
             <div className="space-y-1.5">
               {g.items.map((h) => (
                 <div key={h.id} style={{ background: FELT_DARK, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-3 flex justify-between items-center">
                   <div>
                     <div className="text-sm font-medium" style={{ color: CREAM }}>{h.hallName} · {h.tableName}</div>
-                    <div className="text-xs" style={{ color: "#8fa398" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.openedByName ? ` · Ochdi: ${h.openedByName}` : ""}{h.actorName ? ` · Yopdi: ${h.actorName}` : ""}</div>
+                    <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>{fmtTime(h.startTime)}–{fmtTime(h.endTime)}{h.openedByName ? ` · Ochdi: ${h.openedByName}` : ""}{h.actorName ? ` · Yopdi: ${h.actorName}` : ""}</div>
                   </div>
                   <span className="font-mono text-sm font-semibold" style={{ color: GOLD }}>{fmtMoney(h.total)}</span>
                 </div>
@@ -5487,7 +5681,7 @@ function StatCard({ icon, label, value }) {
     <div style={{ background: FELT, border: `1px solid ${FELT_LIGHT}` }} className="rounded-xl p-4">
       <div className="flex items-center gap-1.5 mb-2" style={{ color: GOLD }}>{icon}</div>
       <div className="font-display text-2xl font-bold mb-1" style={{ color: CREAM }}>{value}</div>
-      <div className="text-xs" style={{ color: "#8fa398" }}>{label}</div>
+      <div className="text-xs" style={{ color: "var(--pos-muted2)" }}>{label}</div>
     </div>
   );
 }
